@@ -2,7 +2,7 @@
 
 ## Description
 HALLO CHATTERS IM XPLDAN 
-this my project BHH BOT  
+this my project Chat BOT  
 
 This is a CLI client for any of [le-chat-php](https://github.com/DanWin/le-chat-php
  
