@@ -1,13 +1,10 @@
-mod util;
-mod lechatphp;
 mod bhc;
-use std::fs::OpenOptions;
+mod lechatphp;
+mod util;
+use chrono::Local;
+
+use crate::lechatphp::LoginErr;
 use anyhow::{anyhow, Context};
-use log;
-use log::LevelFilter;
-use log4rs::append::file::FileAppender;
-use log4rs::encode::pattern::PatternEncoder;
-use log4rs;
 use chrono::{DateTime, Datelike, NaiveDateTime, Utc};
 use clap::Parser;
 use clipboard::ClipboardContext;
@@ -24,11 +21,15 @@ use crossterm::{
 };
 use lazy_static::lazy_static;
 use linkify::LinkFinder;
+use log::LevelFilter;
+use log4rs::append::file::FileAppender;
+use log4rs::encode::pattern::PatternEncoder;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use regex::Regex;
 use reqwest::blocking::multipart;
 use reqwest::blocking::Client;
+use reqwest::redirect::Policy;
 use rodio::{source::Source, Decoder, OutputStream};
 use select::document::Document;
 use select::predicate::{Attr, Name};
@@ -36,14 +37,12 @@ use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::io::{self, Write};
-use std::sync::{Arc, MutexGuard};
+use std::process::Command;
 use std::sync::Mutex;
+use std::sync::{Arc, MutexGuard};
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
-use reqwest;
-use reqwest::redirect::Policy;
-use textwrap;
 use tui::layout::Rect;
 use tui::style::Color as tuiColor;
 use tui::{
@@ -56,16 +55,16 @@ use tui::{
 };
 use unicode_width::UnicodeWidthStr;
 use util::StatefulList;
-use crate::lechatphp::LoginErr;
-
-const LANG: &str = "id";
+const XPLDAN: &str = "XplDan";
+const LANG: &str = "en";
 const SEND_TO_ALL: &str = "s *";
+static mut BOT_ACTIVE: bool = false;
 const SEND_TO_MEMBERS: &str = "s ?";
 const SEND_TO_STAFFS: &str = "s %";
 const SEND_TO_ADMINS: &str = "s _";
-const SOUND1: &[u8] = include_bytes!("sound1.mp3");
-const DKF_URL: &str = "s";
 const BAN_IMPOSTERS: bool = true;
+const SOUND1: &[u8] = include_bytes!("sound1.mp3");
+const DKF_URL: &str = "http://dkforestseeaaq2dqz2uflmlsybvnq2irzn4ygyvu53oazyorednviid.onion";
 const SERVER_DOWN_500_ERR: &str = "500 Internal Server Error, server down";
 const SERVER_DOWN_ERR: &str = "502 Bad Gateway, server down";
 const KICKED_ERR: &str = "You have been kicked";
@@ -75,13 +74,11 @@ const CAPTCHA_WG_ERR: &str = "Wrong Captcha";
 const CAPTCHA_FAILED_SOLVE_ERR: &str = "Failed solve captcha";
 const CAPTCHA_USED_ERR: &str = "Captcha already used or timed out";
 const UNKNOWN_ERR: &str = "Unknown error";
-const XPLDAN: &str = "XplDan";
-static mut BOT_ACTIVE: bool = false;
-const DNMX_URL: &str = "s";
-const USERNOPE: [&str;7] = ["xpldan", "maple", "aiden", "sabme", "stuxnet", "rex", "xpltest"];
+const DNMX_URL: &str = "http://hxuzjtocnzvv5g2rtg2bhwkcbupmk7rclb6lly3fo4tvqkk5oyrv3nid.onion";
 const BHCLI_BLOG_URL: &str = "sss";
 
 lazy_static! {
+    static ref WARNED_USERS: Mutex<HashMap<String, u32>> = Mutex::new(HashMap::new());
     static ref META_REFRESH_RGX: Regex = Regex::new(r#"url='([^']+)'"#).unwrap();
     static ref SESSION_RGX: Regex = Regex::new(r#"session=([^&]+)"#).unwrap();
     static ref COLOR_RGX: Regex = Regex::new(r#"color:\s*([#\w]+)\s*;"#).unwrap();
@@ -89,7 +86,6 @@ lazy_static! {
     static ref PM_RGX: Regex = Regex::new(r#"^/pm ([^\s]+) (.*)"#).unwrap();
     static ref KICK_RGX: Regex = Regex::new(r#"^/(?:kick|k) ([^\s]+)\s?(.*)"#).unwrap();
     static ref IGNORE_RGX: Regex = Regex::new(r#"^/ignore ([^\s]+)"#).unwrap();
-            static ref WARNED_USERS: Mutex<HashMap<String, u32>> = Mutex::new(HashMap::new());
     static ref UNIGNORE_RGX: Regex = Regex::new(r#"^/unignore ([^\s]+)"#).unwrap();
     static ref DLX_RGX: Regex = Regex::new(r#"^/dl([\d]+)$"#).unwrap();
     static ref UPLOAD_RGX: Regex = Regex::new(r#"^/u\s([^\s]+)\s?(?:@([^\s]+)\s)?(.*)$"#).unwrap();
@@ -125,9 +121,10 @@ struct MyConfig {
 }
 
 #[derive(Parser)]
-#[command(name = "BHCCLI")]
-#[command(author = "XplDan <XplDan@protonmail.com>")]
-#[command(version = "2.7.9")]
+#[command(name = "bhcli")]
+#[command(author = "Strange <StrangeGuy6228@protonmail.com>")]
+#[command(version = "0.1.0")]
+
 struct Opts {
     #[arg(long, env = "DKF_API_KEY")]
     dkf_api_key: Option<String>,
@@ -168,13 +165,23 @@ struct Opts {
     dnmx_password: Option<String>,
     #[arg(short = 'c', long, default_value = "default")]
     profile: String,
+
+    //Strange
+    #[arg(long,default_value = "0")]
+    keepalive_send_to: Option<String>,
+
+    #[arg(long)]
+    session: Option<String>,
+
+    #[arg(long)]
+    sxiv: bool,
 }
 
 struct LeChatPHPConfig {
     url: String,
     datetime_fmt: String,
     page_php: String,
-    keepalive_send_to: Option<String>,
+    keepalive_send_to: String,
     members_tag: String,
     staffs_tag: String,
 }
@@ -185,7 +192,7 @@ impl LeChatPHPConfig {
             url: "http://blkhatjxlrvc5aevqzz5t6kxldayog6jlx5h7glnu44euzongl4fh5ad.onion".to_owned(),
             datetime_fmt: "%m-%d %H:%M:%S".to_owned(),
             page_php: "chat.php".to_owned(),
-            keepalive_send_to: Some("0".to_owned()),
+            keepalive_send_to: "0".to_owned(),
             members_tag: "[M] ".to_owned(),
             staffs_tag: "[Staff] ".to_owned(),
         }
@@ -205,12 +212,14 @@ struct LeChatPHPClient {
     config: LeChatPHPConfig,
     last_key_event: Option<KeyCode>,
     manual_captcha: bool,
+    sxiv: bool,
     refresh_rate: u64,
     max_login_retry: isize,
 
     is_muted: Arc<Mutex<bool>>,
     show_sys: bool,
     display_guest_view: bool,
+    display_member_view: bool,
     display_hidden_msgs: bool,
     tx: crossbeam_channel::Sender<PostType>,
     rx: Arc<Mutex<crossbeam_channel::Receiver<PostType>>>,
@@ -226,21 +235,21 @@ impl LeChatPHPClient {
         loop {
             match self.login() {
                 Err(e) => match e {
-                    LoginErr::KickedErr
-                    | LoginErr::RegErr
-                    | LoginErr::NicknameErr
-                    | LoginErr::UnknownErr => {
+                    LoginErr::Kicked
+                    | LoginErr::Reg
+                    | LoginErr::Nickname
+                    | LoginErr::Unknown => {
                         log::error!("{}", e);
                         println!("Login error: {}", e); // Print error message
                         break;
                     }
-                    LoginErr::CaptchaFailedSolveErr => {
+                    LoginErr::CaptchaFailedSolve => {
                         log::error!("{}", e);
                         println!("Captcha failed to solve: {}", e); // Print error message
                         continue;
                     }
-                    LoginErr::CaptchaWgErr | LoginErr::CaptchaUsedErr => {}
-                    LoginErr::ServerDownErr | LoginErr::ServerDown500Err => {
+                    LoginErr::CaptchaWrong | LoginErr::CaptchaUsed => {}
+                    LoginErr::ServerDown | LoginErr::ServerDown500 => {
                         log::error!("{}", e);
                         println!("Server is down: {}", e); // Print error message
                     }
@@ -282,50 +291,42 @@ impl LeChatPHPClient {
             thread::sleep(retry_in);
         }
     }
-
     fn start_keepalive_thread(
         &self,
         exit_rx: crossbeam_channel::Receiver<ExitSignal>,
         last_post_rx: crossbeam_channel::Receiver<()>,
-        
     ) -> thread::JoinHandle<()> {
         let tx = self.tx.clone();
-    //      let msg_keep = "
-    //              >>> H-E-L-L-O C-H-A-T-T-E-R-S W-E-L-C-O-M-E B-A-C-K TO BHC <<<  
-    //     Keep it legal and enjoy your stay.
-    // you can try !-rules && !-help before. and follow the !-rules ~dantca bot";
-    //                 tx.send(PostType::Post(msg_keep.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
-                thread::spawn(move || loop {
-                    // let dantcahelp = || {
-                    //     let help_message = "[color=#ffffff]list of commands for Guests to dantca !![/color]
-                    //     [color=#ffffff]reportdan-![/color] = to send report bug or something wired or if you have suggestions and input you can do this.
-                    //     [color=#ffffff]chatlogs-![/color] = to see chat logs.
-                    //     [color=#ffffff]danbot-![/color] = to see dantca help.
-                    //     [color=#ffffff]bhcli-![/color]  = for display terminal interfaces bhc
-                    //     [color=#FF0000]without [bold]( - )[/bold][/color]
-                    //     [color=#ffffff]note: the bot can gready. and still beta. so dont be anggry have fun to cyber space : )[/color]";
-                    //     tx.send(PostType::Post(help_message.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
-                    // };
-                    let keep_msg = || {
-                        let msg_keep = "[color=#ffffff]>>> H-E-L-L-O C-H-A-T-T-E-R-S W-E-L-C-O-M-E B-A-C-K TO BHC <<<[/color]
-                        Keep it legal and enjoy your stay. 
-                        you can try !-rules && !-help before. and follow the !-rules
-                                               auto massage";
-                        tx.send(PostType::Post(msg_keep.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
-                    };
-                    let clb = || {
-                        tx.send(PostType::Post("<keepalive>".to_owned(), Some("0".to_owned()))).unwrap();
-                        tx.send(PostType::DeleteLast).unwrap();
-                    };
-                    let timeout = after(Duration::from_secs(60 * 75));
-                    // let help = after(Duration::from_secs(4000));
-                    select! {
-                        recv(&last_post_rx) -> _ => {},
-                        recv(&exit_rx) -> _ => return,
-                        recv(&timeout) -> _ => { clb(); keep_msg(); },
-                        // recv(&help) -> _ => { dantcahelp(); }
-                    }
-                })
+        let msg_actived = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let msg_actived_bot = format!("install Dantca patch update {} on system >> ..... configuration successful.. not error report >>> actived <<<", msg_actived);
+        tx.send(PostType::Post(msg_actived_bot.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
+        let send_to = self.config.keepalive_send_to.clone();
+        thread::spawn(move || loop {
+            let keep_msg = || {
+                let msg_keep = "[color=#ffffff]>>> H-E-L-L-O C-H-A-T-T-E-R-S W-E-L-C-O-M-E B-A-C-K TO BHC <<<[/color]
+                Keep it legal and enjoy your stay. 
+                you can try !-rules && !-help before. and follow the !-rules
+                                       auto massage";
+                tx.send(PostType::Post(msg_keep.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
+            };
+            let clb = || {
+                tx.send(PostType::Post("<keepalive>".to_owned(), Some(send_to.clone())))
+                    .unwrap();
+                tx.send(PostType::DeleteLast).unwrap();
+            };
+            let timeout = after(Duration::from_secs(60 * 75));
+            select! {
+                // Ketika kita mengirim pesan ke server chat,
+                // kita akan menerima pesan pada channel ini
+                // dan mereset timer untuk keepalive berikutnya.
+                recv(&last_post_rx) -> _ => {},
+                recv(&exit_rx) -> _ => return,
+                recv(&timeout) -> _ => { 
+                    keep_msg(); 
+                    clb();
+                },
+            }
+        })
     }
 
     // Thread that POST to chat server
@@ -341,11 +342,16 @@ impl LeChatPHPClient {
         let url = format!("{}?action=post&session={}", &full_url, &session);
         thread::spawn(move || loop {
             // select! macro fucks all the LSP, therefore the code gymnastic here
-            let clb = |v: Result<PostType, crossbeam_channel::RecvError>| {
-                match v {
-                    Ok(post_type_recv) => post_msg(&client, post_type_recv, &full_url, session.clone(), &url, &last_post_tx),
-                    Err(_) => return,
-                }
+            let clb = |v: Result<PostType, crossbeam_channel::RecvError>| match v {
+                Ok(post_type_recv) => post_msg(
+                    &client,
+                    post_type_recv,
+                    &full_url,
+                    session.clone(),
+                    &url,
+                    &last_post_tx,
+                ),
+                Err(_) => return,
             };
             let rx = rx.lock().unwrap();
             select! {
@@ -359,33 +365,47 @@ impl LeChatPHPClient {
     fn start_get_msgs_thread(
         &self,
         sig: &Arc<Mutex<Sig>>,
+        tx: &crossbeam_channel::Sender<PostType>,
         messages: &Arc<Mutex<Vec<Message>>>,
         users: &Arc<Mutex<Users>>,
         messages_updated_tx: crossbeam_channel::Sender<()>,
     ) -> thread::JoinHandle<()> {
         let client = self.client.clone();
-        let messages = Arc::clone(&messages);
-        let users = Arc::clone(&users);
+        let messages = Arc::clone(messages);
+        let users = Arc::clone(users);
         let session = self.session.clone().unwrap();
         let username = self.base_client.username.clone();
-        let refresh_rate = self.refresh_rate.clone();
+        let refresh_rate = self.refresh_rate;
         let base_url = self.config.url.clone();
         let page_php = self.config.page_php.clone();
         let datetime_fmt = self.config.datetime_fmt.clone();
         let is_muted = Arc::clone(&self.is_muted);
         let exit_rx = sig.lock().unwrap().clone();
         let sig = Arc::clone(sig);
-        let tx = self.tx.clone();
         let members_tag = self.config.members_tag.clone();
+        let tx = tx.clone();
         thread::spawn(move || loop {
             let (_stream, stream_handle) = OutputStream::try_default().unwrap();
             let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();
             let mut should_notify = false;
-
-            if let Err(err) = get_msgs(&client, &base_url, &page_php, &session, &username, &tx, &users, &sig,
-                 &messages_updated_tx, &members_tag, &datetime_fmt, &messages, &mut should_notify) {
-                log::error!("{}", err);
-            };
+            // Memanggil fungsi get_msgs dan menangani error jika terjadi
+            if let Err(err) = get_msgs(
+                &client,
+                &base_url,
+                &page_php,
+                &session,
+                &username,
+                &users,
+                &tx,
+                &sig,
+                &messages_updated_tx,
+                &members_tag,
+                &datetime_fmt,
+                &messages,
+                &mut should_notify,
+            ) {
+                log::error!("Terjadi kesalahan saat mengambil pesan: {}", err);
+            }
 
             let muted = { *is_muted.lock().unwrap() };
             if should_notify && !muted {
@@ -401,11 +421,12 @@ impl LeChatPHPClient {
             }
         })
     }
+
     fn get_msgs(&mut self) -> anyhow::Result<ExitSignal> {
         let terminate_signal: ExitSignal;
-
         let messages: Arc<Mutex<Vec<Message>>> = Arc::new(Mutex::new(Vec::new()));
         let users: Arc<Mutex<Users>> = Arc::new(Mutex::new(Users::default()));
+
         // Create default app state
         let mut app = App::default();
 
@@ -413,13 +434,12 @@ impl LeChatPHPClient {
         // When someone calls ".signal", all threads receive it,
         // and knows that they have to terminate.
         let sig = Arc::new(Mutex::new(Sig::new()));
-            
+
         let (messages_updated_tx, messages_updated_rx) = crossbeam_channel::unbounded();
         let (last_post_tx, last_post_rx) = crossbeam_channel::unbounded();
-
         let h1 = self.start_keepalive_thread(sig.lock().unwrap().clone(), last_post_rx);
         let h2 = self.start_post_msg_thread(sig.lock().unwrap().clone(), last_post_tx);
-        let h3 = self.start_get_msgs_thread(&sig, &messages, &users, messages_updated_tx);
+        let h3 = self.start_get_msgs_thread(&sig, &self.tx, &messages, &users, messages_updated_tx);
 
         // Terminal initialization
         let mut stdout = io::stdout();
@@ -439,10 +459,12 @@ impl LeChatPHPClient {
             app.is_muted = *self.is_muted.lock().unwrap();
             app.show_sys = self.show_sys;
             app.display_guest_view = self.display_guest_view;
+            app.display_member_view = self.display_member_view;
             app.display_hidden_msgs = self.display_hidden_msgs;
             app.members_tag = self.config.members_tag.clone();
             app.staffs_tag = self.config.staffs_tag.clone();
 
+            // process()
             // Draw UI
             terminal.draw(|f| {
                 draw_terminal_frame(f, &mut app, &messages, &users, &self.base_client.username);
@@ -462,7 +484,6 @@ impl LeChatPHPClient {
                 }
                 Ok(_) => continue,
             };
-            
         }
 
         // Cleanup before leaving
@@ -490,20 +511,46 @@ impl LeChatPHPClient {
     }
 
     fn login(&mut self) -> Result<(), LoginErr> {
-        // If we provided a session, skip login process
-        if self.session.is_some() {
+        // Jika sesi sudah disediakan, gunakan sesi tersebut
+        if let Some(session) = &self.session {
+            log::info!("Menggunakan sesi yang disediakan: {}", session);
             return Ok(());
         }
         
-        self.session = Some(lechatphp::login(
-            &self.client, &self.config.url, &self.config.page_php, &self.base_client.username,
-            &self.base_client.password, &self.guest_color, self.manual_captcha)?);
-        Ok(())
+        log::info!("Mencoba mendapatkan sesi baru");
+        
+        // Lakukan proses login untuk mendapatkan sesi baru
+        let login_result = lechatphp::login(
+            &self.client,
+            &self.config.url,
+            &self.config.page_php,
+            &self.base_client.username,
+            &self.base_client.password,
+            self.manual_captcha,
+            self.sxiv,
+        );
+
+        match login_result {
+            Ok(new_session) => {
+                log::info!("Berhasil mendapatkan sesi baru: {}", new_session);
+                self.session = Some(new_session);
+                Ok(())
+            },
+            Err(err) => {
+                log::error!("Gagal melakukan login: {:?}", err);
+                Err(err)
+            }
+        }
     }
 
     fn logout(&mut self) -> anyhow::Result<()> {
         if let Some(session) = &self.session {
-            lechatphp::logout(&self.client, &self.config.url, &self.config.page_php, &session)?;
+            lechatphp::logout(
+                &self.client,
+                &self.config.url,
+                &self.config.page_php,
+                session,
+            )?;
             self.session = None;
         }
         Ok(())
@@ -515,7 +562,7 @@ impl LeChatPHPClient {
         let color_rx = Arc::clone(&self.color_rx);
         thread::spawn(move || {
             let mut idx = 0;
-            let colors = vec![
+            let colors = [
                 "#ff3366", "#ff6633", "#FFCC33", "#33FF66", "#33FFCC", "#33CCFF", "#3366FF",
                 "#6633FF", "#CC33FF", "#efefef",
             ];
@@ -543,104 +590,363 @@ impl LeChatPHPClient {
             tx.send(msg).unwrap();
         });
     }
-    fn handle_input(&mut self, events: &Events, app: &mut App, messages: &Arc<Mutex<Vec<Message>>>, users: &Arc<Mutex<Users>>) -> Result<(), ExitSignal> {
+
+    fn handle_input(
+        &mut self,
+        events: &Events,
+        app: &mut App,
+        messages: &Arc<Mutex<Vec<Message>>>,
+        users: &Arc<Mutex<Users>>,
+    ) -> Result<(), ExitSignal> {
         match events.next() {
-            Ok(Event::NeedLogin)  => return Err(ExitSignal::NeedLogin),
-            Ok(Event::Terminate)  => return Err(ExitSignal::Terminate),
+            Ok(Event::NeedLogin) => return Err(ExitSignal::NeedLogin),
+            Ok(Event::Terminate) => return Err(ExitSignal::Terminate),
             Ok(Event::Input(evt)) => self.handle_event(app, messages, users, evt),
             _ => Ok(()),
         }
     }
 
-    fn handle_event(&mut self, app: &mut App, messages: &Arc<Mutex<Vec<Message>>>, users: &Arc<Mutex<Users>>, event: event::Event) -> Result<(), ExitSignal> {
+    fn handle_event(
+        &mut self,
+        app: &mut App,
+        messages: &Arc<Mutex<Vec<Message>>>,
+        users: &Arc<Mutex<Users>>,
+        event: event::Event,
+    ) -> Result<(), ExitSignal> {
         match event {
             event::Event::Resize(_cols, _rows) => Ok(()),
-            event::Event::FocusGained          => Ok(()),
-            event::Event::FocusLost            => Ok(()),
-            event::Event::Paste(_)             => Ok(()),
-            event::Event::Key(key_event)       => self.handle_key_event(app, messages, users, key_event),
-            event::Event::Mouse(mouse_event)   => self.handle_mouse_event(app, mouse_event),
+            event::Event::FocusGained => Ok(()),
+            event::Event::FocusLost => Ok(()),
+            event::Event::Paste(_) => Ok(()),
+            event::Event::Key(key_event) => self.handle_key_event(app, messages, users, key_event),
+            event::Event::Mouse(mouse_event) => self.handle_mouse_event(app, mouse_event),
         }
     }
 
-    fn handle_key_event(&mut self, app: &mut App, messages: &Arc<Mutex<Vec<Message>>>, users: &Arc<Mutex<Users>>, key_event: KeyEvent) -> Result<(), ExitSignal> {
+    fn handle_key_event(
+        &mut self,
+        app: &mut App,
+        messages: &Arc<Mutex<Vec<Message>>>,
+        users: &Arc<Mutex<Users>>,
+        key_event: KeyEvent,
+    ) -> Result<(), ExitSignal> {
         if app.input_mode != InputMode::Normal {
             self.last_key_event = None;
         }
         match app.input_mode {
-            InputMode::LongMessage => self.handle_long_message_mode_key_event(app, key_event, messages),
-            InputMode::Normal      => self.handle_normal_mode_key_event(app, key_event, messages),
-            InputMode::Editing |
-            InputMode::EditingErr  => self.handle_editing_mode_key_event(app, key_event, users),
+            InputMode::LongMessage => {
+                self.handle_long_message_mode_key_event(app, key_event, messages)
+            }
+            InputMode::Normal => self.handle_normal_mode_key_event(app, key_event, messages),
+            InputMode::Editing | InputMode::EditingErr => {
+                self.handle_editing_mode_key_event(app, key_event, users)
+            }
         }
     }
 
-    fn handle_long_message_mode_key_event(&mut self, app: &mut App, key_event: KeyEvent, messages: &Arc<Mutex<Vec<Message>>>) -> Result<(), ExitSignal> {
+    fn handle_long_message_mode_key_event(
+        &mut self,
+        app: &mut App,
+        key_event: KeyEvent,
+        messages: &Arc<Mutex<Vec<Message>>>,
+    ) -> Result<(), ExitSignal> {
         match key_event {
-            KeyEvent { code: KeyCode::Enter,     modifiers: KeyModifiers::NONE,    .. } |
-            KeyEvent { code: KeyCode::Esc,       modifiers: KeyModifiers::NONE,    .. } => self.handle_long_message_mode_key_event_esc(app),
-            KeyEvent { code: KeyCode::Char('d'), modifiers: KeyModifiers::CONTROL, .. } => self.handle_long_message_mode_key_event_ctrl_d(app, messages),
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Esc,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_long_message_mode_key_event_esc(app),
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_long_message_mode_key_event_ctrl_d(app, messages),
             _ => {}
         }
         Ok(())
     }
 
-    fn handle_normal_mode_key_event(&mut self, app: &mut App, key_event: KeyEvent, messages: &Arc<Mutex<Vec<Message>>>) -> Result<(), ExitSignal> {
+    fn handle_normal_mode_key_event(
+        &mut self,
+        app: &mut App,
+        key_event: KeyEvent,
+        messages: &Arc<Mutex<Vec<Message>>>,
+    ) -> Result<(), ExitSignal> {
         match key_event {
-            KeyEvent { code: KeyCode::Char('/'), modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_slash(app),
-            KeyEvent { code: KeyCode::Char('j'), modifiers: KeyModifiers::NONE,    .. } |
-            KeyEvent { code: KeyCode::Down,      modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_down(app),
-            KeyEvent { code: KeyCode::Char('k'), modifiers: KeyModifiers::NONE,    .. } |
-            KeyEvent { code: KeyCode::Up,        modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_up(app),
-            KeyEvent { code: KeyCode::Enter,     modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_enter(app, messages),
-            KeyEvent { code: KeyCode::Backspace, modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_backspace(app, messages),
-            KeyEvent { code: KeyCode::Char('y'), modifiers: KeyModifiers::NONE,    .. } |
-            KeyEvent { code: KeyCode::Char('c'), modifiers: KeyModifiers::CONTROL, .. } => self.handle_normal_mode_key_event_yank(app),
-            KeyEvent { code: KeyCode::Char('Y'), modifiers: KeyModifiers::SHIFT,   .. } => self.handle_normal_mode_key_event_yank_link(app),
-            KeyEvent { code: KeyCode::Char('d'), modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_debug(app),
-            KeyEvent { code: KeyCode::Char('D'), modifiers: KeyModifiers::SHIFT,   .. } => self.handle_normal_mode_key_event_debug2(app),
-            KeyEvent { code: KeyCode::Char('m'), modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_toggle_mute(),
-            KeyEvent { code: KeyCode::Char('M'), modifiers: KeyModifiers::SHIFT,   .. } => self.handle_normal_mode_key_event_toggle_sys(),
-            KeyEvent { code: KeyCode::Char('G'), modifiers: KeyModifiers::SHIFT,   .. } => self.handle_normal_mode_key_event_toggle_guest_view(),
-            KeyEvent { code: KeyCode::Char('H'), modifiers: KeyModifiers::SHIFT,   .. } => self.handle_normal_mode_key_event_toggle_hidden(),
-            KeyEvent { code: KeyCode::Char('i'), modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_input_mode(app),
-            KeyEvent { code: KeyCode::Char('Q'), modifiers: KeyModifiers::SHIFT,   .. } => self.handle_normal_mode_key_event_logout()?,
-            KeyEvent { code: KeyCode::Char('q'), modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_exit()?,
-            KeyEvent { code: KeyCode::Char('t'), modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_tag(app),
-            KeyEvent { code: KeyCode::Char('p'), modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_pm(app),
-            KeyEvent { code: KeyCode::Char('k'), modifiers: KeyModifiers::CONTROL, .. } => self.handle_normal_mode_key_event_kick(app),
-            KeyEvent { code: KeyCode::Char('u'), modifiers: KeyModifiers::CONTROL, .. } |
-            KeyEvent { code: KeyCode::PageUp,    modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_page_up(app),
-            KeyEvent { code: KeyCode::Char('d'), modifiers: KeyModifiers::CONTROL, .. } |
-            KeyEvent { code: KeyCode::PageDown,  modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_page_down(app),
-            KeyEvent { code: KeyCode::Esc,       modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_esc(app),
-            KeyEvent { code: KeyCode::Char('u'), modifiers: KeyModifiers::SHIFT,   .. } => self.handle_normal_mode_key_event_shift_u(app),
-            KeyEvent { code: KeyCode::Char('g'), modifiers: KeyModifiers::NONE,    .. } => self.handle_normal_mode_key_event_g(app),
+            KeyEvent {
+                code: KeyCode::Char('/'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_slash(app),
+            KeyEvent {
+                code: KeyCode::Char('j'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Down,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_down(app),
+            KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_up(app),
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_enter(app, messages),
+            KeyEvent {
+                code: KeyCode::Backspace,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_backspace(app, messages),
+            KeyEvent {
+                code: KeyCode::Char('y'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_normal_mode_key_event_yank(app),
+            KeyEvent {
+                code: KeyCode::Char('Y'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_normal_mode_key_event_yank_link(app),
+
+            //Strange
+            KeyEvent {
+                code: KeyCode::Char('D'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_normal_mode_key_event_download_link(app),
+
+            //Strange
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_download_and_view(app),
+
+            // KeyEvent {
+            //     code: KeyCode::Char('d'),
+            //     modifiers: KeyModifiers::NONE,
+            //     ..
+            // } => self.handle_normal_mode_key_event_debug(app),
+            // KeyEvent {
+            //     code: KeyCode::Char('D'),
+            //     modifiers: KeyModifiers::SHIFT,
+            //     ..
+            // } => self.handle_normal_mode_key_event_debug2(app),
+            KeyEvent {
+                code: KeyCode::Char('m'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_toggle_mute(),
+            KeyEvent {
+                code: KeyCode::Char('S'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_normal_mode_key_event_toggle_sys(),
+            KeyEvent {
+                code: KeyCode::Char('M'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_normal_mode_key_event_toggle_member_view(),
+            KeyEvent {
+                code: KeyCode::Char('G'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_normal_mode_key_event_toggle_guest_view(),
+            KeyEvent {
+                code: KeyCode::Char('H'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_normal_mode_key_event_toggle_hidden(),
+            KeyEvent {
+                code: KeyCode::Char('i'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_input_mode(app),
+            KeyEvent {
+                code: KeyCode::Char('Q'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_normal_mode_key_event_logout()?,
+            KeyEvent {
+                code: KeyCode::Char('q'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_exit()?,
+            KeyEvent {
+                code: KeyCode::Char('t'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_tag(app),
+            KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_pm(app),
+            KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_normal_mode_key_event_kick(app),
+            KeyEvent {
+                code: KeyCode::Char('w'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_normal_mode_key_event_warn(app),
+            KeyEvent {
+                code: KeyCode::Char('T'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_normal_mode_key_event_translate(app, messages),
+            KeyEvent {
+                code: KeyCode::Char('u'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::PageUp,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_page_up(app),
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::PageDown,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_page_down(app),
+            KeyEvent {
+                code: KeyCode::Esc,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_esc(app),
+            KeyEvent {
+                code: KeyCode::Char('u'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_normal_mode_key_event_shift_u(app),
+            KeyEvent {
+                code: KeyCode::Char('g'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_g(app),
             _ => {}
         }
         self.last_key_event = Some(key_event.code);
         Ok(())
     }
 
-    fn handle_editing_mode_key_event(&mut self, app: &mut App, key_event: KeyEvent, users: &Arc<Mutex<Users>>) -> Result<(), ExitSignal> {
+    fn handle_editing_mode_key_event(
+        &mut self,
+        app: &mut App,
+        key_event: KeyEvent,
+        users: &Arc<Mutex<Users>>,
+    ) -> Result<(), ExitSignal> {
         app.input_mode = InputMode::Editing;
         match key_event {
-            KeyEvent { code: KeyCode::Enter,     modifiers: KeyModifiers::NONE,    .. } => self.handle_editing_mode_key_event_enter(app)?,
-            KeyEvent { code: KeyCode::Tab,       modifiers: KeyModifiers::NONE,    .. } => self.handle_editing_mode_key_event_tab(app, users),
-            KeyEvent { code: KeyCode::Char('c'), modifiers: KeyModifiers::CONTROL, .. } => self.handle_editing_mode_key_event_ctrl_c(app),
-            KeyEvent { code: KeyCode::Char('a'), modifiers: KeyModifiers::CONTROL, .. } => self.handle_editing_mode_key_event_ctrl_a(app),
-            KeyEvent { code: KeyCode::Char('e'), modifiers: KeyModifiers::CONTROL, .. } => self.handle_editing_mode_key_event_ctrl_e(app),
-            KeyEvent { code: KeyCode::Char('f'), modifiers: KeyModifiers::CONTROL, .. } => self.handle_editing_mode_key_event_ctrl_f(app),
-            KeyEvent { code: KeyCode::Char('b'), modifiers: KeyModifiers::CONTROL, .. } => self.handle_editing_mode_key_event_ctrl_b(app),
-            KeyEvent { code: KeyCode::Char('v'), modifiers: KeyModifiers::CONTROL, .. } => self.handle_editing_mode_key_event_ctrl_v(app),
-            KeyEvent { code: KeyCode::Left,      modifiers: KeyModifiers::NONE,    .. } => self.handle_editing_mode_key_event_left(app),
-            KeyEvent { code: KeyCode::Right,     modifiers: KeyModifiers::NONE,    .. } => self.handle_editing_mode_key_event_right(app),
-            KeyEvent { code: KeyCode::Down,      modifiers: KeyModifiers::NONE,    .. } => self.handle_editing_mode_key_event_down(app),
-            KeyEvent { code: KeyCode::Char(c),   modifiers: KeyModifiers::NONE,    .. } |
-            KeyEvent { code: KeyCode::Char(c),   modifiers: KeyModifiers::SHIFT,   .. } => self.handle_editing_mode_key_event_shift_c(app, c),
-            KeyEvent { code: KeyCode::Backspace, modifiers: KeyModifiers::NONE,    .. } => self.handle_editing_mode_key_event_backspace(app),
-            KeyEvent { code: KeyCode::Delete,    modifiers: KeyModifiers::NONE,    .. } => self.handle_editing_mode_key_event_delete(app),
-            KeyEvent { code: KeyCode::Esc,       modifiers: KeyModifiers::NONE,    .. } => self.handle_editing_mode_key_event_esc(app),
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_editing_mode_key_event_enter(app)?,
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_editing_mode_key_event_tab(app, users),
+            KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_editing_mode_key_event_ctrl_c(app),
+            KeyEvent {
+                code: KeyCode::Char('a'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_editing_mode_key_event_ctrl_a(app),
+            KeyEvent {
+                code: KeyCode::Char('e'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_editing_mode_key_event_ctrl_e(app),
+            KeyEvent {
+                code: KeyCode::Char('f'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_editing_mode_key_event_ctrl_f(app),
+            KeyEvent {
+                code: KeyCode::Char('b'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_editing_mode_key_event_ctrl_b(app),
+            KeyEvent {
+                code: KeyCode::Char('v'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_editing_mode_key_event_ctrl_v(app),
+            KeyEvent {
+                code: KeyCode::Left,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_editing_mode_key_event_left(app),
+            KeyEvent {
+                code: KeyCode::Right,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_editing_mode_key_event_right(app),
+            KeyEvent {
+                code: KeyCode::Down,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_editing_mode_key_event_down(app),
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_editing_mode_key_event_shift_c(app, c),
+            KeyEvent {
+                code: KeyCode::Backspace,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_editing_mode_key_event_backspace(app),
+            KeyEvent {
+                code: KeyCode::Delete,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_editing_mode_key_event_delete(app),
+            KeyEvent {
+                code: KeyCode::Esc,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_editing_mode_key_event_esc(app),
             _ => {}
         }
         Ok(())
@@ -651,12 +957,20 @@ impl LeChatPHPClient {
         app.input_mode = InputMode::Normal;
     }
 
-    fn handle_long_message_mode_key_event_ctrl_d(&mut self, app: &mut App, messages: &Arc<Mutex<Vec<Message>>>) {
+    fn handle_long_message_mode_key_event_ctrl_d(
+        &mut self,
+        app: &mut App,
+        messages: &Arc<Mutex<Vec<Message>>>,
+    ) {
         if let Some(idx) = app.items.state.selected() {
             if let Some(item) = app.items.items.get(idx) {
-                self.post_msg(PostType::Clean(item.date.to_owned(), item.text.text())).unwrap();
+                self.post_msg(PostType::Clean(item.date.to_owned(), item.text.text()))
+                    .unwrap();
                 let mut messages = messages.lock().unwrap();
-                if let Some(pos) = messages.iter().position(|m| m.date == item.date && m.text == item.text) {
+                if let Some(pos) = messages
+                    .iter()
+                    .position(|m| m.date == item.date && m.text == item.text)
+                {
                     messages[pos].hide = !messages[pos].hide;
                 }
                 app.long_message = None;
@@ -672,7 +986,7 @@ impl LeChatPHPClient {
     fn handle_normal_mode_key_event_down(&mut self, app: &mut App) {
         app.items.next()
     }
-    
+
     fn handle_normal_mode_key_event_slash(&mut self, app: &mut App) {
         app.items.unselect();
         app.input = "/".to_owned();
@@ -680,13 +994,18 @@ impl LeChatPHPClient {
         app.input_mode = InputMode::Editing;
     }
 
-    fn handle_normal_mode_key_event_enter(&mut self, app: &mut App, messages: &Arc<Mutex<Vec<Message>>>) {
+    fn handle_normal_mode_key_event_enter(
+        &mut self,
+        app: &mut App,
+        messages: &Arc<Mutex<Vec<Message>>>,
+    ) {
         if let Some(idx) = app.items.state.selected() {
             if let Some(item) = app.items.items.get(idx) {
                 // If we have a filter, <enter> will "jump" to the message
-                if app.filter != "" {
+                if !app.filter.is_empty() {
                     let idx = messages
-                        .lock().unwrap()
+                        .lock()
+                        .unwrap()
                         .iter()
                         .enumerate()
                         .find(|(_, e)| e.date == item.date)
@@ -701,11 +1020,18 @@ impl LeChatPHPClient {
         }
     }
 
-    fn handle_normal_mode_key_event_backspace(&mut self, app: &mut App, messages: &Arc<Mutex<Vec<Message>>>) {
+    fn handle_normal_mode_key_event_backspace(
+        &mut self,
+        app: &mut App,
+        messages: &Arc<Mutex<Vec<Message>>>,
+    ) {
         if let Some(idx) = app.items.state.selected() {
             if let Some(item) = app.items.items.get(idx) {
                 let mut messages = messages.lock().unwrap();
-                if let Some(pos) = messages.iter().position(|m| m.date == item.date && m.text == item.text) {
+                if let Some(pos) = messages
+                    .iter()
+                    .position(|m| m.date == item.date && m.text == item.text)
+                {
                     if item.deleted {
                         messages.remove(pos);
                     } else {
@@ -722,14 +1048,11 @@ impl LeChatPHPClient {
                 if let Some(upload_link) = &item.upload_link {
                     let mut ctx: ClipboardContext = ClipboardProvider::new().unwrap();
                     let mut out = format!("{}{}", self.config.url, upload_link);
-                    if let Some((_, _, msg)) =
-                        get_message(&item.text, &self.config.members_tag)
-                    {
+                    if let Some((_, _, msg)) = get_message(&item.text, &self.config.members_tag) {
                         out = format!("{} {}", msg, out);
                     }
                     ctx.set_contents(out).unwrap();
-                } else if let Some((_, _, msg)) =
-                    get_message(&item.text, &self.config.members_tag)
+                } else if let Some((_, _, msg)) = get_message(&item.text, &self.config.members_tag)
                 {
                     let mut ctx: ClipboardContext = ClipboardProvider::new().unwrap();
                     ctx.set_contents(msg).unwrap();
@@ -745,7 +1068,8 @@ impl LeChatPHPClient {
                     let mut ctx: ClipboardContext = ClipboardProvider::new().unwrap();
                     let out = format!("{}{}", self.config.url, upload_link);
                     ctx.set_contents(out).unwrap();
-                } else if let Some((_, _, msg)) = get_message(&item.text, &self.config.members_tag) {
+                } else if let Some((_, _, msg)) = get_message(&item.text, &self.config.members_tag)
+                {
                     let finder = LinkFinder::new();
                     let links: Vec<_> = finder.links(msg.as_str()).collect();
                     if let Some(link) = links.get(0) {
@@ -757,18 +1081,94 @@ impl LeChatPHPClient {
         }
     }
 
-    fn handle_normal_mode_key_event_debug(&mut self, app: &mut App) {
+    fn handle_normal_mode_key_event_download_link(&mut self, app: &mut App) {
         if let Some(idx) = app.items.state.selected() {
             if let Some(item) = app.items.items.get(idx) {
-                log::error!("{:?}", item.text.text());
+                if let Some(upload_link) = &item.upload_link {
+                    let url = format!("{}{}", self.config.url, upload_link);
+                    let _ = Command::new("curl")
+                        .args([
+                            "--socks5",
+                            "localhost:9050",
+                            "--socks5-hostname",
+                            "localhost:9050",
+                            &url,
+                        ])
+                        .arg("-o")
+                        .arg("download.img")
+                        .output()
+                        .expect("Failed to execute curl command");
+                } else if let Some((_, _, msg)) = get_message(&item.text, &self.config.members_tag)
+                {
+                    let finder = LinkFinder::new();
+                    let links: Vec<_> = finder.links(msg.as_str()).collect();
+                    if let Some(link) = links.first() {
+                        let url = link.as_str();
+                        let _ = Command::new("curl")
+                            .args([
+                                "--socks5",
+                                "localhost:9050",
+                                "--socks5-hostname",
+                                "localhost:9050",
+                                url,
+                            ])
+                            .arg("-o")
+                            .arg("download.img")
+                            .output()
+                            .expect("Failed to execute curl command");
+                    }
+                }
             }
         }
     }
 
-    fn handle_normal_mode_key_event_debug2(&mut self, app: &mut App) {
+    fn handle_normal_mode_key_event_download_and_view(&mut self, app: &mut App) {
         if let Some(idx) = app.items.state.selected() {
             if let Some(item) = app.items.items.get(idx) {
-                log::error!("{:?} {:?}", item.text, item.upload_link);
+                if let Some(upload_link) = &item.upload_link {
+                    let url = format!("{}{}", self.config.url, upload_link);
+                    let _ = Command::new("curl")
+                        .args([
+                            "--socks5",
+                            "localhost:9050",
+                            "--socks5-hostname",
+                            "localhost:9050",
+                            &url,
+                        ])
+                        .arg("-o")
+                        .arg("download.img")
+                        .output()
+                        .expect("Failed to execute curl command");
+
+                    let _ = Command::new("xdg-open")
+                        .arg("./download.img")
+                        .output()
+                        .expect("Failed to execute sxiv command");
+                } else if let Some((_, _, msg)) = get_message(&item.text, &self.config.members_tag)
+                {
+                    let finder = LinkFinder::new();
+                    let links: Vec<_> = finder.links(msg.as_str()).collect();
+                    if let Some(link) = links.first() {
+                        let url = link.as_str();
+                        let _ = Command::new("curl")
+                            .args([
+                                "--socks5",
+                                "localhost:9050",
+                                "--socks5-hostname",
+                                "localhost:9050",
+                                url,
+                            ])
+                            .arg("-o")
+                            .arg("download.img")
+                            .output()
+                            .expect("Failed to execute curl command");
+
+                        let _ = Command::new("sxiv")
+                            .arg("./download.img")
+                            .output()
+                            .expect("Failed to execute sxiv command");
+                    }
+                }
             }
         }
     }
@@ -786,6 +1186,9 @@ impl LeChatPHPClient {
         self.display_guest_view = !self.display_guest_view;
     }
 
+    fn handle_normal_mode_key_event_toggle_member_view(&mut self) {
+        self.display_member_view = !self.display_member_view;
+    }
 
     fn handle_normal_mode_key_event_g(&mut self, app: &mut App) {
         // Handle "gg" key combination
@@ -798,6 +1201,7 @@ impl LeChatPHPClient {
     fn handle_normal_mode_key_event_toggle_hidden(&mut self) {
         self.display_hidden_msgs = !self.display_hidden_msgs;
     }
+
     fn handle_normal_mode_key_event_input_mode(&mut self, app: &mut App) {
         app.input_mode = InputMode::Editing;
         app.items.unselect();
@@ -815,11 +1219,9 @@ impl LeChatPHPClient {
     fn handle_normal_mode_key_event_tag(&mut self, app: &mut App) {
         if let Some(idx) = app.items.state.selected() {
             let text = &app.items.items.get(idx).unwrap().text;
-            if let Some(username) = get_username(
-                &self.base_client.username,
-                &text,
-                &self.config.members_tag,
-            ) {
+            if let Some(username) =
+                get_username(&self.base_client.username, &text, &self.config.members_tag)
+            {
                 if text.text().starts_with(&app.members_tag) {
                     app.input = format!("/m @{} ", username);
                 } else {
@@ -862,6 +1264,54 @@ impl LeChatPHPClient {
         }
     }
 
+    //Strange
+    fn handle_normal_mode_key_event_translate(
+        &mut self,
+        app: &mut App,
+        messages: &Arc<Mutex<Vec<Message>>>,
+    ) {
+        log::error!("translate running");
+        if let Some(idx) = app.items.state.selected() {
+            log::error!("1353");
+            let mut message_lock = messages.lock().unwrap();
+            if let Some(message) = message_lock.get_mut(idx) {
+                log::error!("1356");
+                let original_text = &mut message.text;
+                let output = Command::new("trans")
+                    .arg("-b")
+                    .arg(&original_text.text())
+                    .output()
+                    .expect("Failed to execute translation command");
+
+                if output.status.success() {
+                    if let Ok(new_text) = String::from_utf8(output.stdout) {
+                        *original_text = StyledText::Text(new_text.trim().to_owned());
+                        log::error!("Translation successful: {}", new_text);
+                    } else {
+                        log::error!("Failed to decode translation output as UTF-8");
+                    }
+                } else {
+                    log::error!("Translation command failed with error: {:?}", output.status);
+                }
+            }
+        }
+    }
+
+    //Strange
+    fn handle_normal_mode_key_event_warn(&mut self, app: &mut App) {
+        if let Some(idx) = app.items.state.selected() {
+            if let Some(username) = get_username(
+                &self.base_client.username,
+                &app.items.items.get(idx).unwrap().text,
+                &self.config.members_tag,
+            ) {
+                app.input = format!("!warn @{} ", username);
+                app.input_idx = app.input.width();
+                app.input_mode = InputMode::Editing;
+                app.items.unselect();
+            }
+        }
+    }
     fn handle_normal_mode_key_event_page_up(&mut self, app: &mut App) {
         if let Some(idx) = app.items.state.selected() {
             app.items.state.select(idx.checked_sub(10).or(Some(0)));
@@ -896,6 +1346,19 @@ impl LeChatPHPClient {
 
         let input: String = app.input.drain(..).collect();
         app.input_idx = 0;
+
+        // Iterate over commands and execute associated actions
+        for (command, action) in &app.commands.commands {
+            // log::error!("command :{} action :{}", command, action);
+            let expected_input = format!("!{}", command);
+            if input == expected_input {
+                // Execute the action by posting a message
+                self.post_msg(PostType::Post(action.clone(), None)).unwrap();
+                // Return Ok(()) if the action is executed successfully
+                return Ok(());
+            }
+        }
+
         if input == "/dl" {
             // Delete last message
             self.post_msg(PostType::DeleteLast).unwrap();
@@ -981,13 +1444,26 @@ impl LeChatPHPClient {
                 },
                 None => SEND_TO_ALL,
             }
-                .to_owned();
+            .to_owned();
             let msg = match captures.get(3) {
                 Some(msg_match) => msg_match.as_str().to_owned(),
                 None => "".to_owned(),
             };
             self.post_msg(PostType::Upload(file_path, send_to, msg))
                 .unwrap();
+        } else if input.starts_with("!warn") {
+            // Strange
+            let msg: String = input
+                .find('@')
+                .map(|index| input[index..].to_string())
+                .unwrap_or_else(String::new);
+
+            let end_msg = format!(
+                "This is your warning - {}, will be kicked next  !rules",
+                msg
+            );
+            // log::error!("The Strange end_msg is :{}", end_msg);
+            self.post_msg(PostType::Post(end_msg, None)).unwrap();
         } else {
             if input.starts_with("/") && !input.starts_with("/me ") {
                 app.input_idx = input.len();
@@ -1010,9 +1486,9 @@ impl LeChatPHPClient {
                 let mut prefix = "";
                 if parts.len() == 1
                     && ((parts[0] == "/kick" || parts[0] == "/k")
-                    || parts[0] == "/pm"
-                    || parts[0] == "/ignore"
-                    || parts[0] == "/unignore")
+                        || parts[0] == "/pm"
+                        || parts[0] == "/ignore"
+                        || parts[0] == "/unignore")
                 {
                     should_autocomplete = true;
                 } else if user_prefix.starts_with("@") {
@@ -1145,6 +1621,7 @@ impl LeChatPHPClient {
         Ok(())
     }
 }
+
 // Give a char index, return the byte position
 fn byte_pos(v: &str, idx: usize) -> Option<usize> {
     let mut b = 0;
@@ -1177,7 +1654,9 @@ fn autocomplete_username(users: &Arc<Mutex<Users>>, prefix: &str) -> Option<Stri
     let users = users.lock().unwrap();
     let all_users = users.all();
     let prefix_lower = prefix.to_lowercase();
-    let filtered = all_users.iter().find(|(_, name)| name.to_lowercase().starts_with(&prefix_lower));
+    let filtered = all_users
+        .iter()
+        .find(|(_, name)| name.to_lowercase().starts_with(&prefix_lower));
     Some(filtered?.1.to_owned())
 }
 
@@ -1218,7 +1697,10 @@ enum RetryErr {
     Exit,
 }
 
-fn retry_fn<F>(mut clb: F) where F: FnMut() -> anyhow::Result<RetryErr> {
+fn retry_fn<F>(mut clb: F)
+where
+    F: FnMut() -> anyhow::Result<RetryErr>,
+{
     loop {
         match clb() {
             Ok(RetryErr::Retry) => continue,
@@ -1226,24 +1708,39 @@ fn retry_fn<F>(mut clb: F) where F: FnMut() -> anyhow::Result<RetryErr> {
             Err(err) => {
                 log::error!("{}", err);
                 continue;
-            },
+            }
         }
     }
 }
-fn post_msg(client: &Client, post_type_recv: PostType, full_url: &str, session: String, url: &str, last_post_tx: &crossbeam_channel::Sender<()>) {
+
+fn post_msg(
+    client: &Client,
+    post_type_recv: PostType,
+    full_url: &str,
+    session: String,
+    url: &str,
+    last_post_tx: &crossbeam_channel::Sender<()>,
+) {
     let mut should_reset_keepalive_timer = false;
     retry_fn(|| -> anyhow::Result<RetryErr> {
         let post_type = post_type_recv.clone();
         let resp_text = client.get(url).send()?.text()?;
         let doc = Document::from(resp_text.as_str());
-        let nc = doc.find(Attr("name", "nc")).next().context("nc not found")?;
+        let nc = doc
+            .find(Attr("name", "nc"))
+            .next()
+            .context("nc not found")?;
         let nc_value = nc.attr("value").context("nc value not found")?.to_owned();
-        let postid = doc.find(Attr("name", "postid")).next().context("failed to get postid")?;
-        let postid_value = postid.attr("value").context("failed to get postid value")?.to_owned();
+        let postid = doc
+            .find(Attr("name", "postid"))
+            .next()
+            .context("failed to get postid")?;
+        let postid_value = postid
+            .attr("value")
+            .context("failed to get postid value")?
+            .to_owned();
         let mut params: Vec<(&str, String)> = vec![
-            ("multi", "on".to_owned()),
             ("lang", LANG.to_owned()),
-            ("multi", "on".to_owned()),
             ("nc", nc_value.to_owned()),
             ("session", session.clone()),
         ];
@@ -1271,7 +1768,7 @@ fn post_msg(client: &Client, post_type_recv: PostType, full_url: &str, session: 
                 ]);
             }
             PostType::NewNickname(new_nickname) => {
-                set_profile_base_info(&client, full_url, &mut params)?;
+                set_profile_base_info(client, full_url, &mut params)?;
                 params.extend(vec![
                     ("do", "save".to_owned()),
                     ("timestamps", "on".to_owned()),
@@ -1279,7 +1776,7 @@ fn post_msg(client: &Client, post_type_recv: PostType, full_url: &str, session: 
                 ]);
             }
             PostType::NewColor(new_color) => {
-                set_profile_base_info(&client, full_url, &mut params)?;
+                set_profile_base_info(client, full_url, &mut params)?;
                 params.extend(vec![
                     ("do", "save".to_owned()),
                     ("timestamps", "on".to_owned()),
@@ -1287,7 +1784,7 @@ fn post_msg(client: &Client, post_type_recv: PostType, full_url: &str, session: 
                 ]);
             }
             PostType::Ignore(username) => {
-                set_profile_base_info(&client, full_url, &mut params)?;
+                set_profile_base_info(client, full_url, &mut params)?;
                 params.extend(vec![
                     ("do", "save".to_owned()),
                     ("timestamps", "on".to_owned()),
@@ -1295,7 +1792,7 @@ fn post_msg(client: &Client, post_type_recv: PostType, full_url: &str, session: 
                 ]);
             }
             PostType::Unignore(username) => {
-                set_profile_base_info(&client, full_url, &mut params)?;
+                set_profile_base_info(client, full_url, &mut params)?;
                 params.extend(vec![
                     ("do", "save".to_owned()),
                     ("timestamps", "on".to_owned()),
@@ -1303,7 +1800,7 @@ fn post_msg(client: &Client, post_type_recv: PostType, full_url: &str, session: 
                 ]);
             }
             PostType::Profile(new_color, new_nickname) => {
-                set_profile_base_info(&client, full_url, &mut params)?;
+                set_profile_base_info(client, full_url, &mut params)?;
                 params.extend(vec![
                     ("do", "save".to_owned()),
                     ("timestamps", "on".to_owned()),
@@ -1330,10 +1827,7 @@ fn post_msg(client: &Client, post_type_recv: PostType, full_url: &str, session: 
                         ("what", "all".to_owned()),
                     ]);
                 } else {
-                    params.extend(vec![
-                        ("sendto", "".to_owned()),
-                        ("what", "last".to_owned()),
-                    ]);
+                    params.extend(vec![("sendto", "".to_owned()), ("what", "last".to_owned())]);
                 }
             }
             PostType::Upload(file_path, send_to, msg) => {
@@ -1347,13 +1841,14 @@ fn post_msg(client: &Client, post_type_recv: PostType, full_url: &str, session: 
                         .text("message", msg)
                         .text("sendto", send_to.to_owned())
                         .text("what", "purge".to_owned())
-                        .file("file", file_path) {
+                        .file("file", file_path)
+                    {
                         Ok(f) => f,
                         Err(e) => {
                             log::error!("{:?}", e);
                             return Ok(RetryErr::Exit);
-                        },
-                    }
+                        }
+                    },
                 );
             }
             PostType::Clean(_, _) => {}
@@ -1377,11 +1872,14 @@ fn post_msg(client: &Client, post_type_recv: PostType, full_url: &str, session: 
     }
 }
 
-
 fn parse_date(date: &str, datetime_fmt: &str) -> NaiveDateTime {
     let now = Utc::now();
     let date_fmt = format!("%Y-{}", datetime_fmt);
-    NaiveDateTime::parse_from_str(format!("{}-{}", now.year(), date).as_str(), date_fmt.as_str()).unwrap()
+    NaiveDateTime::parse_from_str(
+        format!("{}-{}", now.year(), date).as_str(),
+        date_fmt.as_str(),
+    )
+    .unwrap()
 }
 
 fn get_msgs(
@@ -1390,264 +1888,146 @@ fn get_msgs(
     page_php: &str,
     session: &str,
     username: &str,
-    tx: &crossbeam_channel::Sender<PostType>,
     users: &Arc<Mutex<Users>>,
+    tx: &crossbeam_channel::Sender<PostType>,
     sig: &Arc<Mutex<Sig>>,
     messages_updated_tx: &crossbeam_channel::Sender<()>,
-    members_tag:&str,
+    members_tag: &str,
     datetime_fmt: &str,
     messages: &Arc<Mutex<Vec<Message>>>,
-    should_notify: &mut bool) -> anyhow::Result<()>
-{
-    let url = format!("{}/{}?action=view&session={}&lang={}", base_url, page_php, session, LANG);
+    should_notify: &mut bool,
+) -> anyhow::Result<()> {
+    let url = format!(
+        "{}/{}?action=view&session={}&lang={}",
+        base_url, page_php, session, LANG
+    );
     let resp_text = client.get(url).send()?.text()?;
     let resp_text = resp_text.replace("<br>", "\n");
     let doc = Document::from(resp_text.as_str());
-    let new_messages = match extract_messages(&doc) {
-        Ok(messages) => messages,
-        Err(_) => {
-            // Failed to get messages, probably need re-login
-            sig.lock().unwrap().signal(&ExitSignal::NeedLogin);
-            return Ok(());
-        }
-    };
-    {
-        let messages = messages.lock().unwrap();
-        process_new_messages(&new_messages, &messages, datetime_fmt, members_tag, username, should_notify, tx,  &users);
-        // Bangun vektor pesan. Tandai pesan yang dihapus.
-        update_messages(new_messages, messages, datetime_fmt);
-        // Notify new messages has arrived.
-        // This ensure that we redraw the messages on the screen right away.
-        // Otherwise, the screen would not redraw until a keyboard event occurs.
-        messages_updated_tx.send(()).unwrap();
-    }
-    {
-        let mut userss = users.lock().unwrap();
-        ban_imposters(&tx, &username, &userss);
-        *userss = extract_users(&doc);
-    }
-    Ok(())
-}
-fn update_messages(new_messages: Vec<Message>, mut messages: MutexGuard<Vec<Message>>, datetime_fmt: &str) {
-    let mut old_msg_ptr = 0;
-    for new_msg in new_messages.into_iter() {
-        loop {
-            if let Some(old_msg) = messages.get_mut(old_msg_ptr) {
-                let new_parsed_dt = parse_date(&new_msg.date, datetime_fmt);
-                let parsed_dt = parse_date(&old_msg.date, datetime_fmt);
-                if new_parsed_dt < parsed_dt {
-                    old_msg.deleted = true;
-                    old_msg_ptr += 1;
-                    continue;
-                }
-                if new_parsed_dt == parsed_dt {
-                    if old_msg.text != new_msg.text {
-                        let mut found = false;
-                        let mut x = 0;
-                        loop {
-                            x += 1;
-                            if let Some(old_msg) = messages.get(old_msg_ptr + x) {
-                                let parsed_dt = parse_date(&old_msg.date, datetime_fmt);
-                                if new_parsed_dt == parsed_dt {
-                                    if old_msg.text == new_msg.text {
-                                        found = true;
-                                        break;
-                                    }
-                                    continue;
-                                }
-                            }
-                            break;
-                        }
-                        if !found {
-                            messages.insert(old_msg_ptr, new_msg);
-                            old_msg_ptr += 1;
-                        }
-                    }
-                    old_msg_ptr += 1;
-                    break;
-                }
-            }
-            messages.insert(old_msg_ptr, new_msg);
-            old_msg_ptr += 1;
-            break;
-        }
-    }
-    messages.truncate(1000);
-}
-fn extract_users(doc: &Document) -> Users {
-    let mut users = Users::default();
+    
+    let new_messages = extract_messages(&doc).map_err(|_| {
+        // Gagal mendapatkan pesan, mungkin perlu login ulang
+        sig.lock().unwrap().signal(&ExitSignal::NeedLogin);
+        anyhow::anyhow!("Gagal mengekstrak pesan")
+    })?;
 
-    if let Some(chatters) = doc.find(Attr("id", "chatters")).next() {
-        if let Some(tr) = chatters.find(Name("tr")).next() {
-            let mut th_count = 0;
-            for e in tr.children() {
-                if let select::node::Data::Element(_, _) = e.data() {
-                    if e.name() == Some("th") {
-                        th_count += 1;
-                        continue;
-                    }
-                    for user_span in e.find(Name("span")) {
-                        if let Some(user_style) = user_span.attr("style") {
-                            if let Some(captures) = COLOR_RGX.captures(user_style) {
-                                if let Some(color_match) = captures.get(1) {
-                                    let color = color_match.as_str().to_owned();
-                                    let tui_color = parse_color(&color);
-                                    let username = user_span.text();
-                                    match th_count {
-                                        1 => users.admin.push((tui_color, username)),
-                                        2 => users.staff.push((tui_color, username)),
-                                        3 => users.members.push((tui_color, username)),
-                                        4 => users.guests.push((tui_color, username)),
-                                        _ => {}
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    {
+        let  messages = messages.lock().unwrap();
+        process_new_messages(&new_messages, &messages, datetime_fmt, members_tag, username, should_notify, tx, users);
+        // Membangun vektor pesan. Menandai pesan yang dihapus.
+        update_messages(new_messages, messages, datetime_fmt);
+        // Memberi tahu bahwa pesan baru telah tiba.
+        // Ini memastikan bahwa kita menggambar ulang pesan di layar segera.
+        // Jika tidak, layar tidak akan digambar ulang sampai ada event keyboard.
+        messages_updated_tx.send(()).map_err(|_| anyhow::anyhow!("Gagal mengirim sinyal pembaruan pesan"))?;
     }
-    users
+
+    {
+        let mut users = users.lock().unwrap();
+        ban_imposters(tx, username, &users);
+        *users = extract_users(&doc);
+    }
+
+    Ok(())
 }
 
 fn process_new_messages(
-    new_messages: &[Message], messages: &MutexGuard<Vec<Message>>,
-    datetime_fmt: &str, members_tag: &str, username: &str, should_notify: &mut bool,
+    new_messages: &Vec<Message>,
+    messages: &MutexGuard<Vec<Message>>,
+    datetime_fmt: &str,
+    members_tag: &str,
+    username: &str,
+    should_notify: &mut bool,
     tx: &crossbeam_channel::Sender<PostType>,
     users: &Arc<Mutex<Users>>,
 ) {
-    let mut chatlog_file = OpenOptions::new()
-        .write(true)
-        .append(true)
-        .create(true)
-        .open("/home/xpldan/Personal/bhcli/chatlog/chatlog.txt")
-        .expect("Tidak dapat membuka file chatlog.txt");
+ 
+    if let Some(last_known_msg) = messages.first() {
+        let last_known_msg_parsed_dt = parse_date(&last_known_msg.date, datetime_fmt);
+        let filtered = new_messages.iter().filter(|new_msg| {
+            last_known_msg_parsed_dt <= parse_date(&new_msg.date, datetime_fmt)
+                && !(new_msg.date == last_known_msg.date && last_known_msg.text == new_msg.text)
+        });
+        for new_msg in filtered {
+            if let Some((from, to_opt, msg)) = get_message(&new_msg.text, members_tag) {
+                // Proses pesan baru
+                // unsafe {
+                //     // if BOT_ACTIVE {
+                //     //     if from != "XplDan" {
+                //     //         dantca_absen(&msg, &from, &tx);
+                //     //     }
+                //     // }
+                // }
 
-        if let Some(last_known_msg) = messages.first() {
-            let last_known_msg_parsed_dt = parse_date(&last_known_msg.date, datetime_fmt);
-            let filtered = new_messages.iter().filter(|new_msg| {
-                last_known_msg_parsed_dt <= parse_date(&new_msg.date, datetime_fmt)
-                    && !(new_msg.date == last_known_msg.date && last_known_msg.text == new_msg.text)
-            });          
-            for new_msg in filtered {
-                if let Some((from, to_opt, msg)) = get_message(&new_msg.text, members_tag) {
-                    unsafe { if BOT_ACTIVE {
-                        if from != "XplDan"{
-                    dantca_absen(&msg, &from, &tx);
-                        }
-                    } }
-                    // Tulis pesan baru ke file chatlog
-                    writeln!(chatlog_file,"{} - {}: {}", new_msg.date, from, msg).expect("Gagal menulis ke file chatlog");
-                    if msg.contains(format!("@{}", &username).as_str()) {
+                // Tulis pesan baru ke file chatlog
+              
+                // Notifikasi ketika di-tag
+                if msg.contains(format!("@{}", &username).as_str()) {
+                    *should_notify = true;
+                }
+
+                // Notifikasi ketika menerima PM
+                if let Some(to) = to_opt {
+                    if to == username && msg != "!up" {
                         *should_notify = true;
                     }
-                    unsafe {
-                        if BOT_ACTIVE {
-                                let users_lock = users.lock().unwrap();
-                                dantca_imps_proses(&from, &msg, &tx, &users_lock);
-                            }
-                    }
-                   if let Some(to) = to_opt {
-                        if to == username && msg != "!up" {
-                            *should_notify = true;
-                        }  
-                     } // Not
-                    // Process new messages
-                    // only members can used this.
-                    let users_lock = users.lock().unwrap();
-                //    if from == XPLDAN || users_lock.members.iter().any(|(_color, username)| username.to_lowercase() == from.to_lowercase()) {
-                //     let fromsa = from.to_lowercase();
-                //        if msg.contains("dantcaoff!") {
-                //             toggle_bot_active(false, &tx, &from);
-                //         }
-                //         if msg.contains("dantcago!") {
-                //             toggle_bot_active(true, &tx, &from);
-                //         }
-                //         if msg.contains("statusdan!") {
-                //             check_bot_status(&tx, &from);
-                //         }
-                //         if msg.contains("reportdan!") {
-                //             reports_msg_bot(&tx, &from);
-                //         }
-                //         if fromsa !="xpldan" {
-                //         if msg.contains("danbot!") {
-                //             help_command(&tx, &from, &users_lock, &msg);
-                //         }}
-                //         if msg.contains("chatlogs!") {
-                //             chatlog_fun(&tx, &from);
-                //         }
-                //         if msg.contains("regbotdan!"){
-                //             register_user(&tx, &from);
-                //         }
-                //     } else {
-                //         if msg.contains("danbot!") {
-                //             help_command(&tx, &from, &users_lock, &msg);
-                //         }
-                //         if msg.contains("chatlogs!") {
-                //             chatlog_fun(&tx, &from);
-                //         }
-                //         if msg.contains("reportdan!") {
-                //             reports_msg_bot(&tx, &from);
-                //         }
-                //     }
-                }                   
+                }
+
+                unsafe {
+                    if BOT_ACTIVE {
+                        let users_lock = users.lock().unwrap();
+                        dantca_imps_proses(&from, &msg, &tx, &users_lock);
                     }
                 }
+
+                // Proses perintah bot (hanya untuk anggota)
+                let users_lock = users.lock().unwrap();
+                if from == XPLDAN || users_lock.members.iter().any(|(_color, username)| username.to_lowercase() == from.to_lowercase()) {
+                    // let fromsa = from.to_lowercase();
+                    if msg.contains("dantcaoff!") {
+                        toggle_bot_active(false, &tx, &from);
+                    }
+                    if msg.contains("dantcago!") {
+                        toggle_bot_active(true, &tx, &from);
+                    }
+                    if msg.contains("statusdan!") {
+                        check_bot_status(&tx, &from);
+                    }
+                    if msg.contains("reportdan!") {
+                        reports_msg_bot(&tx, &from);
+                    }
+                    // if fromsa != "xpldan" {
+                    //     if msg.contains("danbot!") {
+                    //         help_command(&tx, &from, &users_lock, &msg);
+                    //     }
+                    // }
+                    // if msg.contains("chatlogs!") {
+                    //     chatlog_fun(&tx, &from);
+                    // }
+                   
+                } 
             }
-// fn help_command(tx: &crossbeam_channel::Sender<PostType>, from: &str,users:&Users, msg : &str) {
-//     if users.members.iter().any(|(_color, username)| username.to_lowercase().contains(&from)) {
-//         if  msg.contains("danbot!") {
-//             if from != "xpldan" {
-//             tx.send(PostType::Post(format!("Hallo @{} 
-//             [color=#ffffff]list of commands for Members to dantca !![/color]
-//             [color=#ffffff]dantcago-![/color] = to turn on dantca.
-//             [color=#ffffff]dantcaoff-![/color] = to deactived dantca.
-//             [color=#ffffff]statusdan-![/color] = to see whether dantca status is activated or deactivated.
-//             [color=#ffffff]reportdan-![/color] = to send report bug or something wired or if you have suggestions and input you can do this.
-//             [color=#ffffff]regbotdan-![/color] = If you are not on the list then you can use this command.
-//             [color=#ffffff]chatlogs-![/color] = to see chat logs.
-//             [color=#ffffff]danbot-![/color] = to see dantca help.
-//             [color=#FF0000]without ( - )[/color]
-//             [color=#ffffff]note: the bot can gready. and still beta. so dont be anggry have fun to cyber space : )[/color] ", from), Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
-//             }
-//         }
-//     } else if  !users.members.iter().any(|(_color, username)| username.to_lowercase().contains(&from)) {
-//         tx.send(PostType::Post(format!("Hallo @{} 
-//         [color=#ffffff]list of commands for Guests to dantca !![/color]
-//         [color=#ffffff]reportdan-![/color] = to send report bug or something wired or if you have suggestions and input you can do this.
-//         [color=#ffffff]chatlogs-![/color] = to see chat logs.
-//         [color=#ffffff]danbot-![/color] = to see dantca help.
-//         [color=#ffffff]bhcli-![/color]  = for display terminal interfaces bhc
-//         [color=#FF0000]without ( - )[/color]
-//         [color=#ffffff]note: the bot can gready. and still beta. so dont be anggry have fun to cyber space : )[/color] ", from), Some(SEND_TO_ALL.to_owned()))).unwrap();
-//     }  
-// }
-// /////!function dantca
-fn chatlog_fun(tx: &crossbeam_channel::Sender<PostType>, from: &str){
-    if from != "xpldan" {
-    let chatlog_path = "/home/dantca/Personal/bhcli/chatlog/chatlog.txt";
-    let pesan_pm = format!("Hello @{}, the chatlog file will be sent via PM, please be patient.. -<", from);
-    tx.send(PostType::Post(pesan_pm, Some(from.to_owned()))).unwrap();
-    tx.send(PostType::Upload(chatlog_path.to_owned(), from.to_owned(), "".to_owned())).unwrap();
+        }
     }
 }
-fn reports_msg_bot(tx: &crossbeam_channel::Sender<PostType>, from: &str ){
-    let pesan_pm = format!("Hallo , @{} You can send a message here. To send a message to XplDan, click the '-All chatters-' box above the chat, and select user @XplDan",from);
+// !XPLDAN command
+
+fn reports_msg_bot(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
+    let pesan_pm = format!("Hallo , @{} You can send a message here. To send a message to XplDan, click the '-All chatters-' box above the chat, and select user @XplDan", from);
     let username_tujuan = from.to_owned();
     tx.send(PostType::Post(pesan_pm, Some(username_tujuan))).unwrap(); 
 }
+
 fn toggle_bot_active(active: bool, tx: &crossbeam_channel::Sender<PostType>, from: &str) {
     unsafe {
         BOT_ACTIVE = active;
     }
     let status_message = if active {
-        format!("[color=#ffffff]>[] -- Dantca Actived By @{} -- []<[/color] ",from)
+        format!("[color=#ffffff]>[] -- Dantca Actived By @{} -- []<[/color] ", from)
     } else {
-        format!("[color=#ffffff]>[] -- Dantca Deactived By @{} -- []<[/color] ",from)
+        format!("[color=#ffffff]>[] -- Dantca Deactived By @{} -- []<[/color] ", from)
     };
-    let message = format!("{}", status_message);
-    tx.send(PostType::Post(message, None)).unwrap();
+    tx.send(PostType::Post(status_message, None)).unwrap();
 }
 
 fn check_bot_status(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
@@ -1657,50 +2037,11 @@ fn check_bot_status(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
     } else {
         "> - Dantca Not Running - <"
     };
-    let messtats = format!(" {} == [ @{} ]",status_message, from);
-    tx.send(PostType::Post(messtats.to_string(), None)).unwrap();
+    let messtats = format!(" {} == [ @{} ]", status_message, from);
+    tx.send(PostType::Post(messtats, None)).unwrap();
 }
 
-fn register_user(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
-    if USERNOPE.contains(&from) {
-    let messagea = format!("Hallo, @{}, Your account has been registered in the dantca family group --0<",from);
-    let username_tujuan = from.to_owned();
-    tx.send(PostType::Post(messagea, Some(username_tujuan))).unwrap();  
-  } else {
-        let message = format!("Hallo @{}, -> registering an account begins... -> please wait... ->",from);
-        let username_tujuan = from.to_owned();
-        tx.send(PostType::Post(message, Some(username_tujuan))).unwrap();
-        }
-}
-// dantca no here 
-
-fn dantca_absen(msg : &str,from : &str, tx : &crossbeam_channel::Sender<PostType>){
-    if msg.contains("[M]") {return}
-    else{
-    if msg.contains("xpldan") || msg.contains(format!("@{}",XPLDAN).as_str()) {
-        let msgafk = format!("Hello @{}, @XplDan [color=#f9f099]is not available at the moment, he changed his mode to Dantca. We will forward your message to xpldan when he returns![/color]",from);
-        tx.send(PostType::Post(msgafk,Some(from.to_owned()))).unwrap();
-    }
-}
-}
-
-// fn dantca_afk(msg: &str, from : &str, tx: &crossbeam_channel::Sender<PostType>){
-//   let  msgcopy = msg.to_lowercase();
-//     if msg.contains("[M]") {return}
-//     if msgcopy.contains("xpldan")|| msgcopy.contains("@xpldan"){
-//         if from != "Xpldan" || from != "XplDan"  {
-//             let msg_afk = format!("Hello @{}, @XplDan is not available at the moment, he changed his mode to Dantca BOT. We will forward your message to xpldan when he returns!",from);
-//             tx.send(PostType::Post(msg_afk,None)).unwrap();
-//         }
-//     }
-// }
-// 
-// !bot by dantca XplDan
 fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
-    // let fromsa = from.to_lowercase();
-    // if fromsa != "xpldan" || fromsa != "@xpldan"  {
-    //     dantca_afk(&msg, &from, &tx);
-    // }
     let msg = msg.to_lowercase();
     let from = from.to_lowercase();
     for (_color, username) in &users.guests {
@@ -1708,20 +2049,19 @@ fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<Post
             let username_to_kick = from.to_owned();
             let (triggered, kicked, warns) = check_message_content(&msg);
             
-            // Initialize or update the warning count for the user
             let mut warned_users = WARNED_USERS.lock().unwrap();
             let count = warned_users.entry(from.to_owned()).or_insert(0);
             if triggered {
                 *count += 1;
                 tx.send(PostType::Post(format!("-> Hallo @{} -> your warns: [color=#ffffff]you have warns[/color] [color=#00FF00]| {}/2 |[/color] -> [color=#ffffff]{}[/color] [color=#f734ee][BANNED TOPIC][/color]-< ", username_to_kick, *count, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
             }
-            if *count >= 2 { // Jika pengguna telah mendapat peringatan 2 kali
-                tx.send(PostType::Kick(format!("hallo  @{}, [color=#ffffff]You have been warned multiple waarns[/color] [color=#00FF00]| = {} = |[/color] [color=#FF0000]times[/color] [color=#00FF00]and are now being kicked.[/color]", username_to_kick,*count), username_to_kick.clone())).unwrap();
+            if *count >= 2 {
+                tx.send(PostType::Kick(format!("hallo  @{}, [color=#ffffff]You have been warned multiple waarns[/color] [color=#00FF00]| = {} = |[/color] [color=#FF0000]times[/color] [color=#00FF00]and are now being kicked.[/color]", username_to_kick, *count), username_to_kick.clone())).unwrap();
             }
-if kicked {
-    let msg = format!("-> [color=#ffffff]Hallo[/color] @{} -> your warns: [color=#ffffff]{}[/color] [color=#f734ee][BANNED TOPIC][/color] -< ", username_to_kick, warns);
-    tx.send(PostType::Post(msg, Some(SEND_TO_ALL.to_owned()))).unwrap();
-}
+            if kicked {
+                let msg = format!("-> [color=#ffffff]Hallo[/color] @{} -> your warns: [color=#ffffff]{}[/color] [color=#f734ee][BANNED TOPIC][/color] -< ", username_to_kick, warns);
+                tx.send(PostType::Post(msg, Some(SEND_TO_ALL.to_owned()))).unwrap();
+            }
             if msg.contains("chat?") || msg.contains("what about chat?") {
                 tx.send(PostType::Post(format!("Halo, @{} !about", from), Some(SEND_TO_ALL.to_owned()))).unwrap();
             } else if msg.contains("bhcli") {
@@ -1743,12 +2083,8 @@ if kicked {
                 tx.send(PostType::Post(format!("hallo @{} you can try !-links and send to @0", from), None)).unwrap();
             }
         }
-       
     }
 }
-
-
-
 fn check_message_content(msg: &str) -> (bool, bool, &str) {
     let msgcopy = msg.to_lowercase();
     let mut triggered = false;
@@ -2015,36 +2351,6 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
 
     (triggered, kicked, warns)
 }
-fn delete_message(
-    client: &Client,
-    full_url: &str,
-    params: &mut Vec<(&str, String)>,
-    date: String,
-    text: String,
-) -> anyhow::Result<()> {
-    params.extend(vec![
-        ("action", "admin".to_owned()),
-        ("do", "clean".to_owned()),
-        ("what", "choose".to_owned()),
-    ]);
-    let clean_resp_txt = client.post(full_url).form(&params).send()?.text()?;
-    let doc = Document::from(clean_resp_txt.as_str());
-    let nc = doc.find(Attr("name", "nc")).next().context("nc not found")?;
-    let nc_value = nc.attr("value").context("nc value not found")?.to_owned();
-    let msgs = extract_messages(&doc)?;
-    if let Some(msg) = msgs.iter().find(|m| m.date == date && m.text.text() == text) {
-        let msg_id = msg.id.context("msg id not found")?;
-        params.extend(vec![
-			("multi", "on".to_owned()),
-            ("nc", nc_value.to_owned()),
-            ("what", "selected".to_owned()),
-            ("mid[]", format!("{}", msg_id)),
-        ]);
-        client.post(full_url).form(&params).send()?;
-    }
-    Ok(())
-}
-
 fn ban_imposters(tx: &crossbeam_channel::Sender<PostType>, account_username: &str, users: &Users) {
     if BAN_IMPOSTERS {
         //bot nama yang aneh aneh
@@ -2167,9 +2473,95 @@ fn ban_imposters(tx: &crossbeam_channel::Sender<PostType>, account_username: &st
         }
     }
 }
+fn update_messages(
+    new_messages: Vec<Message>,
+    mut messages: MutexGuard<Vec<Message>>,
+    datetime_fmt: &str,
+) {
+    let mut old_msg_ptr = 0;
+    for new_msg in new_messages.into_iter() {
+        loop {
+            if let Some(old_msg) = messages.get_mut(old_msg_ptr) {
+                let new_parsed_dt = parse_date(&new_msg.date, datetime_fmt);
+                let parsed_dt = parse_date(&old_msg.date, datetime_fmt);
+                if new_parsed_dt < parsed_dt {
+                    old_msg.deleted = true;
+                    old_msg_ptr += 1;
+                    continue;
+                }
+                if new_parsed_dt == parsed_dt {
+                    if old_msg.text != new_msg.text {
+                        let mut found = false;
+                        let mut x = 0;
+                        loop {
+                            x += 1;
+                            if let Some(old_msg) = messages.get(old_msg_ptr + x) {
+                                let parsed_dt = parse_date(&old_msg.date, datetime_fmt);
+                                if new_parsed_dt == parsed_dt {
+                                    if old_msg.text == new_msg.text {
+                                        found = true;
+                                        break;
+                                    }
+                                    continue;
+                                }
+                            }
+                            break;
+                        }
+                        if !found {
+                            messages.insert(old_msg_ptr, new_msg);
+                            old_msg_ptr += 1;
+                        }
+                    }
+                    old_msg_ptr += 1;
+                    break;
+                }
+            }
+            messages.insert(old_msg_ptr, new_msg);
+            old_msg_ptr += 1;
+            break;
+        }
+    }
+    messages.truncate(1000);
+}
+
+fn delete_message(
+    client: &Client,
+    full_url: &str,
+    params: &mut Vec<(&str, String)>,
+    date: String,
+    text: String,
+) -> anyhow::Result<()> {
+    params.extend(vec![
+        ("action", "admin".to_owned()),
+        ("do", "clean".to_owned()),
+        ("what", "choose".to_owned()),
+    ]);
+    let clean_resp_txt = client.post(full_url).form(&params).send()?.text()?;
+    let doc = Document::from(clean_resp_txt.as_str());
+    let nc = doc
+        .find(Attr("name", "nc"))
+        .next()
+        .context("nc not found")?;
+    let nc_value = nc.attr("value").context("nc value not found")?.to_owned();
+    let msgs = extract_messages(&doc)?;
+    if let Some(msg) = msgs
+        .iter()
+        .find(|m| m.date == date && m.text.text() == text)
+    {
+        let msg_id = msg.id.context("msg id not found")?;
+        params.extend(vec![
+            ("nc", nc_value.to_owned()),
+            ("what", "selected".to_owned()),
+            ("mid[]", format!("{}", msg_id)),
+        ]);
+        client.post(full_url).form(&params).send()?;
+    }
+    Ok(())
+}
 
 impl ChatClient {
     fn new(params: Params) -> Self {
+        // println!("session[2026] : {:?}",params.session);
         let mut c = new_default_le_chat_php_client(params.clone());
         c.config.url = params.url.unwrap_or(
             "http://blkhatjxlrvc5aevqzz5t6kxldayog6jlx5h7glnu44euzongl4fh5ad.onion/index.php"
@@ -2178,7 +2570,8 @@ impl ChatClient {
         c.config.page_php = params.page_php.unwrap_or("chat.php".to_owned());
         c.config.datetime_fmt = params.datetime_fmt.unwrap_or("%m-%d %H:%M:%S".to_owned());
         c.config.members_tag = params.members_tag.unwrap_or("[M] ".to_owned());
-        c.config.keepalive_send_to = None;
+        c.config.keepalive_send_to = params.keepalive_send_to.unwrap_or("0".to_owned());
+        // c.session = params.session;
         Self {
             le_chat_php_client: c,
         }
@@ -2188,9 +2581,12 @@ impl ChatClient {
         self.le_chat_php_client.run_forever();
     }
 }
+
 fn new_default_le_chat_php_client(params: Params) -> LeChatPHPClient {
     let (color_tx, color_rx) = crossbeam_channel::unbounded();
     let (tx, rx) = crossbeam_channel::unbounded();
+    let session = params.session.clone();
+    // println!("session[2050] : {:?}",params.session);
     LeChatPHPClient {
         base_client: BaseClient {
             username: params.username,
@@ -2198,15 +2594,18 @@ fn new_default_le_chat_php_client(params: Params) -> LeChatPHPClient {
         },
         max_login_retry: params.max_login_retry,
         guest_color: params.guest_color,
-        session: None,
+        // session: params.session,
+        session,
         last_key_event: None,
         client: params.client,
         manual_captcha: params.manual_captcha,
+        sxiv: params.sxiv,
         refresh_rate: params.refresh_rate,
         config: LeChatPHPConfig::new_black_hat_chat_config(),
         is_muted: Arc::new(Mutex::new(false)),
         show_sys: false,
         display_guest_view: false,
+        display_member_view: false,
         display_hidden_msgs: false,
         tx,
         rx: Arc::new(Mutex::new(rx)),
@@ -2217,7 +2616,7 @@ fn new_default_le_chat_php_client(params: Params) -> LeChatPHPClient {
 
 struct ChatClient {
     le_chat_php_client: LeChatPHPClient,
-}        
+}
 
 #[derive(Debug, Clone)]
 struct Params {
@@ -2230,8 +2629,11 @@ struct Params {
     guest_color: String,
     client: Client,
     manual_captcha: bool,
+    sxiv: bool,
     refresh_rate: u64,
     max_login_retry: isize,
+    keepalive_send_to: Option<String>,
+    session: Option<String>,
 }
 
 #[derive(Clone)]
@@ -2309,7 +2711,7 @@ fn get_guest_color(wanted: Option<String>) -> String {
     }
     .to_owned()
 }
-// by dantca
+
 fn get_tor_client(socks_proxy_url: &str, no_proxy: bool) -> Client {
     let ua = "Mozilla/5.0 (Windows NT 10.0; rv:102.0) Gecko/20100101 Firefox/102.0";
     let mut builder = reqwest::blocking::ClientBuilder::new()
@@ -2335,9 +2737,7 @@ fn ask_username(username: Option<String>) -> String {
 }
 
 fn ask_password(password: Option<String>) -> String {
-    password.unwrap_or_else(|| {
-        rpassword::prompt_password("Password: ").unwrap()
-    })
+    password.unwrap_or_else(|| rpassword::prompt_password("Password: ").unwrap())
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2391,7 +2791,7 @@ fn start_dkf_notifier(client: &Client, dkf_api_key: &str) {
 
 // Start thread that looks for new emails on DNMX every minutes.
 fn start_dnmx_mail_notifier(client: &Client, username: &str, password: &str) {
-    let params: Vec<(&str, &str)> = vec![("login_username",username), ("secretkey",password)];
+    let params: Vec<(&str, &str)> = vec![("login_username", username), ("secretkey", password)];
     let login_url = format!("{}/src/redirect.php", DNMX_URL);
     client.post(login_url).form(&params).send().unwrap();
 
@@ -2422,8 +2822,40 @@ fn start_dnmx_mail_notifier(client: &Client, username: &str, password: &str) {
     });
 }
 
+//Strange
+#[derive(Debug, Deserialize)]
+struct Commands {
+    commands: HashMap<String, String>,
+}
+
+impl Default for Commands {
+    fn default() -> Self {
+        Commands {
+            commands: HashMap::new(), // Initialize commands with empty HashMap
+        }
+    }
+}
+
+// Strange
+// Function to read the configuration file and parse it
+fn read_commands_file(file_path: &str) -> Result<Commands, Box<dyn std::error::Error>> {
+    // Read the contents of the file
+    let commands_content = std::fs::read_to_string(file_path)?;
+    // log::error!("Read file contents: {}", commands_content);
+    // Deserialize the contents into a Commands struct
+    let commands: Commands = toml::from_str(&commands_content)?;
+    // log::error!(
+    //     "Deserialized file contents into Commands struct: {:?}",
+    //     commands
+    // );
+
+    Ok(commands)
+}
+
 fn main() -> anyhow::Result<()> {
     let mut opts: Opts = Opts::parse();
+    // println!("Parsed Session: {:?}", opts.session);
+
 
     // Configs file
     if let Ok(config_path) = confy::get_configuration_file_path("bhcli", None) {
@@ -2447,9 +2879,11 @@ fn main() -> anyhow::Result<()> {
 
     let config = log4rs::config::Config::builder()
         .appender(log4rs::config::Appender::builder().build("logfile", Box::new(logfile)))
-        .build(log4rs::config::Root::builder()
-            .appender("logfile")
-            .build(LevelFilter::Error))?;
+        .build(
+            log4rs::config::Root::builder()
+                .appender("logfile")
+                .build(LevelFilter::Error),
+        )?;
 
     log4rs::init_config(config)?;
 
@@ -2478,9 +2912,14 @@ fn main() -> anyhow::Result<()> {
         guest_color,
         client: client.clone(),
         manual_captcha: opts.manual_captcha,
+        sxiv: opts.sxiv,
         refresh_rate: opts.refresh_rate,
         max_login_retry: opts.max_login_retry,
+        keepalive_send_to: opts.keepalive_send_to,
+        session: opts.session.clone(),
     };
+    // println!("Session[2378]: {:?}", opts.session);
+
 
     ChatClient::new(params).run_forever();
 
@@ -2529,35 +2968,41 @@ fn get_message(root: &StyledText, members_tag: &str) -> Option<(String, Option<S
                     _ => return None,
                 };
                 return Some((from, None, msg));
-            },
+            }
             StyledText::Text(t) => {
                 if t == &members_tag {
                     let from = match children.get(children.len() - 2)? {
-                        StyledText::Styled(_, children) => match children.get(children.len() - 1)? {
-                            StyledText::Text(t) => t.to_owned(),
-                            _ => return None,
-                        },
+                        StyledText::Styled(_, children) => {
+                            match children.get(children.len() - 1)? {
+                                StyledText::Text(t) => t.to_owned(),
+                                _ => return None,
+                            }
+                        }
                         _ => return None,
                     };
                     return Some((from, None, msg));
                 } else if t == "[" {
                     let from = match children.get(children.len() - 2)? {
-                        StyledText::Styled(_, children) => match children.get(children.len() - 1)? {
-                            StyledText::Text(t) => t.to_owned(),
-                            _ => return None,
-                        },
+                        StyledText::Styled(_, children) => {
+                            match children.get(children.len() - 1)? {
+                                StyledText::Text(t) => t.to_owned(),
+                                _ => return None,
+                            }
+                        }
                         _ => return None,
                     };
                     let to = match children.get(2)? {
-                        StyledText::Styled(_, children) => match children.get(children.len() - 1)? {
-                            StyledText::Text(t) => Some(t.to_owned()),
-                            _ => return None,
-                        },
+                        StyledText::Styled(_, children) => {
+                            match children.get(children.len() - 1)? {
+                                StyledText::Text(t) => Some(t.to_owned()),
+                                _ => return None,
+                            }
+                        }
                         _ => return None,
                     };
                     return Some((from, to, msg));
                 }
-            },
+            }
             _ => return None,
         }
     }
@@ -2582,7 +3027,13 @@ struct Message {
 }
 
 impl Message {
-    fn new(id: Option<usize>, typ: MessageType, date: String, upload_link: Option<String>, text: StyledText) -> Self {
+    fn new(
+        id: Option<usize>,
+        typ: MessageType,
+        date: String,
+        upload_link: Option<String>,
+        text: StyledText,
+    ) -> Self {
         Self {
             id,
             typ,
@@ -2682,22 +3133,22 @@ fn process_node(e: select::node::Node, mut color: tuiColor) -> (StyledText, Opti
                             color = parse_color(color_match);
                         }
                     }
-                },
+                }
                 Some("font") => {
                     if let Some(color_str) = e.attr("color") {
                         color = parse_color(color_str);
                     }
-                },
+                }
                 Some("a") => {
                     color = tuiColor::White;
                     if let (Some("attachement"), Some(href)) = (e.attr("class"), e.attr("href")) {
                         upload_link = Some(href.to_owned());
                     }
-                },
+                }
                 Some("style") => {
                     return (StyledText::None, None);
-                },
-                _ => {},
+                }
+                _ => {}
             }
             let mut children_texts: Vec<StyledText> = vec![];
             let children = e.children();
@@ -2749,6 +3200,42 @@ impl Users {
     // }
 }
 
+fn extract_users(doc: &Document) -> Users {
+    let mut users = Users::default();
+
+    if let Some(chatters) = doc.find(Attr("id", "chatters")).next() {
+        if let Some(tr) = chatters.find(Name("tr")).next() {
+            let mut th_count = 0;
+            for e in tr.children() {
+                if let select::node::Data::Element(_, _) = e.data() {
+                    if e.name() == Some("th") {
+                        th_count += 1;
+                        continue;
+                    }
+                    for user_span in e.find(Name("span")) {
+                        if let Some(user_style) = user_span.attr("style") {
+                            if let Some(captures) = COLOR_RGX.captures(user_style) {
+                                if let Some(color_match) = captures.get(1) {
+                                    let color = color_match.as_str().to_owned();
+                                    let tui_color = parse_color(&color);
+                                    let username = user_span.text();
+                                    match th_count {
+                                        1 => users.admin.push((tui_color, username)),
+                                        2 => users.staff.push((tui_color, username)),
+                                        3 => users.members.push((tui_color, username)),
+                                        4 => users.guests.push((tui_color, username)),
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    users
+}
 
 fn remove_suffix<'a>(s: &'a str, suffix: &str) -> &'a str {
     s.strip_suffix(suffix).unwrap_or(s)
@@ -2833,7 +3320,7 @@ fn draw_terminal_frame(
 fn gen_lines(msg_txt: &StyledText, w: usize, line_prefix: &str) -> Vec<Vec<(tuiColor, String)>> {
     let txt = msg_txt.text();
     let wrapped = textwrap::fill(&txt, w);
-    let splits = wrapped.split('\n').collect::<Vec<&str>>();
+    let splits = wrapped.split("\n").collect::<Vec<&str>>();
     let mut new_lines: Vec<Vec<(tuiColor, String)>> = Vec::new();
     let mut ctxt = msg_txt.colored_text();
     ctxt.reverse();
@@ -2843,7 +3330,7 @@ fn gen_lines(msg_txt: &StyledText, w: usize, line_prefix: &str) -> Vec<Vec<(tuiC
     let mut first_in_line = true;
     loop {
         if let Some((color, mut txt)) = ctxt.pop() {
-            txt = txt.replace('\n', "");
+            txt = txt.replace("\n", "");
             if let Some(split) = splits.get(split_idx) {
                 if let Some(chr) = txt.chars().next() {
                     if chr == ' ' && first_in_line {
@@ -2862,7 +3349,7 @@ fn gen_lines(msg_txt: &StyledText, w: usize, line_prefix: &str) -> Vec<Vec<(tuiC
                     new_lines.push(line.clone());
                     line.clear();
                     line.push((tuiColor::White, line_prefix.to_owned()));
-                    ctxt.push((color, txt[remain..].to_owned()));
+                    ctxt.push((color, txt[(remain)..].to_owned()));
                     ptr = 0;
                     split_idx += 1;
                     first_in_line = true;
@@ -2903,7 +3390,12 @@ fn render_long_message(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut Ap
     }
 }
 
-fn render_help_txt(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r: Rect, curr_user: &str) {
+fn render_help_txt(
+    f: &mut Frame<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    r: Rect,
+    curr_user: &str,
+) {
     let (mut msg, style) = match app.input_mode {
         InputMode::Normal => (
             vec![
@@ -2937,6 +3429,8 @@ fn render_help_txt(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r
         let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
         msg.extend(vec![Span::raw(" | "), Span::styled("not muted", style)]);
     }
+
+    //Strange
     if app.display_guest_view {
         let fg = tuiColor::LightGreen;
         let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
@@ -2946,6 +3440,18 @@ fn render_help_txt(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r
         let style = Style::default().fg(fg);
         msg.extend(vec![Span::raw(" | "), Span::styled("G", style)]);
     }
+
+    //Strange
+    if app.display_member_view {
+        let fg = tuiColor::LightGreen;
+        let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
+        msg.extend(vec![Span::raw(" | "), Span::styled("M", style)]);
+    } else {
+        let fg = tuiColor::Gray;
+        let style = Style::default().fg(fg);
+        msg.extend(vec![Span::raw(" | "), Span::styled("M", style)]);
+    }
+
     if app.display_hidden_msgs {
         let fg = tuiColor::LightGreen;
         let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
@@ -2977,7 +3483,7 @@ fn render_textbox(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r:
             InputMode::Editing => Style::default().fg(tuiColor::Yellow),
             InputMode::EditingErr => Style::default().fg(tuiColor::Red),
         })
-        .block(Block::default().borders(Borders::ALL).title("Kirim"));
+        .block(Block::default().borders(Borders::ALL).title("Input"));
     f.render_widget(input, r);
     match app.input_mode {
         InputMode::LongMessage => {}
@@ -3024,8 +3530,26 @@ fn render_messages(
                 }
             }
 
+            // Strange
+            // Display only messages from members and staff
+            if app.display_member_view {
+                // In members mode, include only messages from members and staff
+                let text = m.text.text();
+                if !text.starts_with(&app.members_tag) && !text.starts_with(&app.staffs_tag) {
+                    return None;
+                }
+                if let Some((_, Some(_), _)) = get_message(&m.text, &app.members_tag) {
+                    return None;
+                }
+            }
+
             if app.filter != "" {
-                if !m.text.text().to_lowercase().contains(&app.filter.to_lowercase()) {
+                if !m
+                    .text
+                    .text()
+                    .to_lowercase()
+                    .contains(&app.filter.to_lowercase())
+                {
                     return None;
                 }
             }
@@ -3037,8 +3561,8 @@ fn render_messages(
             let mut rows = vec![];
             let date_style = match (m.deleted, m.hide) {
                 (false, true) => Style::default().fg(tuiColor::Gray),
-                (false, _)    => Style::default().fg(tuiColor::DarkGray),
-                (true, _)     => Style::default().fg(tuiColor::Red),
+                (false, _) => Style::default().fg(tuiColor::DarkGray),
+                (true, _) => Style::default().fg(tuiColor::Red),
             };
             let mut spans_vec = vec![Span::styled(m.date.clone(), date_style)];
             let show_sys_sep = app.show_sys && m.typ == MessageType::SysMsg;
@@ -3062,9 +3586,9 @@ fn render_messages(
             }
 
             let style = match (m.deleted, m.hide) {
-                (true, _) => Style::default().bg(tuiColor::Rgb(139, 0, 0)),
+                (true, _) => Style::default().bg(tuiColor::Rgb(30, 0, 0)),
                 (_, true) => Style::default().bg(tuiColor::Rgb(20, 20, 20)),
-                _         => Style::default(),
+                _ => Style::default(),
             };
             Some(ListItem::new(rows).style(style))
         })
@@ -3085,10 +3609,10 @@ fn render_users(f: &mut Frame<CrosstermBackend<io::Stdout>>, r: Rect, users: &Ar
     let users = users.lock().unwrap();
     let mut users_list: Vec<ListItem> = vec![];
     let mut users_types: Vec<(&Vec<(tuiColor, String)>, &str)> = Vec::new();
-    users_types.push((&users.admin, "-- GOD --"));
-    users_types.push((&users.staff, "-- My Dream --"));
-    users_types.push((&users.members, "-- Anggota --"));
-    users_types.push((&users.guests, "-- Beban anjit --"));
+    users_types.push((&users.admin, "-- Admin --"));
+    users_types.push((&users.staff, "-- Staff --"));
+    users_types.push((&users.members, "-- Members --"));
+    users_types.push((&users.guests, "-- Guests --"));
     for (users, label) in users_types.into_iter() {
         users_list.push(ListItem::new(Span::raw(label)));
         for (tui_color, username) in users.iter() {
@@ -3123,16 +3647,48 @@ struct App {
     is_muted: bool,
     show_sys: bool,
     display_guest_view: bool,
+    display_member_view: bool,
     display_hidden_msgs: bool,
     items: StatefulList<Message>,
     filter: String,
     members_tag: String,
     staffs_tag: String,
     long_message: Option<Message>,
+    commands: Commands,
 }
 
 impl Default for App {
     fn default() -> App {
+        // Read commands from the file and set them as default values
+        let commands = if let Ok(config_path) = confy::get_configuration_file_path("bhcli", None) {
+            if let Some(config_path_str) = config_path.to_str() {
+                match read_commands_file(config_path_str) {
+                    Ok(commands) => commands,
+                    Err(err) => {
+                        log::error!(
+                            "Failed to read commands from config file - {} :
+{}",
+                            config_path_str,
+                            err
+                        );
+                        Commands {
+                            commands: HashMap::new(),
+                        }
+                    }
+                }
+            } else {
+                log::error!("Failed to convert configuration file path to string.");
+                Commands {
+                    commands: HashMap::new(),
+                }
+            }
+        } else {
+            log::error!("Failed to get configuration file path.");
+            Commands {
+                commands: HashMap::new(),
+            }
+        };
+
         App {
             input: String::new(),
             input_idx: 0,
@@ -3140,12 +3696,14 @@ impl Default for App {
             is_muted: false,
             show_sys: false,
             display_guest_view: false,
+            display_member_view: false,
             display_hidden_msgs: false,
             items: StatefulList::new(),
             filter: "".to_owned(),
             members_tag: "".to_owned(),
             staffs_tag: "".to_owned(),
             long_message: None,
+            commands,
         }
     }
 }
@@ -3206,9 +3764,9 @@ impl Events {
                 if event::poll(timeout).unwrap() {
                     let evt = event::read().unwrap();
                     match evt {
-                        CEvent::FocusGained => {},
-                        CEvent::FocusLost => {},
-                        CEvent::Paste(_) => {},
+                        CEvent::FocusGained => {}
+                        CEvent::FocusLost => {}
+                        CEvent::Paste(_) => {}
                         CEvent::Resize(_, _) => tx.send(Event::Input(evt)).unwrap(),
                         CEvent::Key(_) => tx.send(Event::Input(evt)).unwrap(),
                         CEvent::Mouse(mouse_event) => {

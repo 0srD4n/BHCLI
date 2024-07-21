@@ -2,14 +2,11 @@ use crate::{
     trim_newline, CAPTCHA_FAILED_SOLVE_ERR, CAPTCHA_USED_ERR, CAPTCHA_WG_ERR, KICKED_ERR, LANG,
     NICKNAME_ERR, REG_ERR, SERVER_DOWN_500_ERR, SERVER_DOWN_ERR, SESSION_RGX, UNKNOWN_ERR,
 };
-use anyhow::{Context, Result};
 use base64::engine::general_purpose;
 use base64::Engine;
 use http::StatusCode;
-use serde::de::Unexpected::Other;
-use image::DynamicImage;
 use regex::Regex;
-use reqwest::blocking::{Client, Response};
+use reqwest::blocking::Client;
 use select::document::Document;
 use select::predicate::{And, Attr, Name};
 use std::fmt::{Display, Formatter};
@@ -22,49 +19,41 @@ pub mod captcha;
 
 #[derive(Debug)]
 pub enum LoginErr {
-    ServerDown,
-    ServerDown500,
-    CaptchaFailedSolve,
-    CaptchaUsed,
-    CaptchaWrong,
-    Registration,
-    Nickname,
-    Kicked,
-    Unknown,
+    ServerDownErr,
+    ServerDown500Err,
+    CaptchaFailedSolveErr, // Ketika auto-solver gagal memecahkan captcha bawaan lechatphp
+    CaptchaUsedErr,
+    CaptchaWgErr,
+    RegErr,
+    NicknameErr,
+    KickedErr,
+    UnknownErr,
+    InvalidSession,
     Reqwest(reqwest::Error),
-    Anyhow(anyhow::Error),
-    Other,
 }
 
 impl From<reqwest::Error> for LoginErr {
-    fn from(error: reqwest::Error) -> Self {
-        LoginErr::Reqwest(error)
-    }
-}
-
-impl From<anyhow::Error> for LoginErr {
-    fn from(error: anyhow::Error) -> Self {
-        LoginErr::Anyhow(error)
+    fn from(value: reqwest::Error) -> Self {
+        LoginErr::Reqwest(value)
     }
 }
 
 impl Display for LoginErr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let message = match self {
-            LoginErr::ServerDown => SERVER_DOWN_ERR,
-            LoginErr::ServerDown500 => SERVER_DOWN_500_ERR,
-            LoginErr::CaptchaFailedSolve => CAPTCHA_FAILED_SOLVE_ERR,
-            LoginErr::CaptchaUsed => CAPTCHA_USED_ERR,
-            LoginErr::CaptchaWrong => CAPTCHA_WG_ERR,
-            LoginErr::Registration => REG_ERR,
-            LoginErr::Nickname => NICKNAME_ERR,
-            LoginErr::Kicked => KICKED_ERR,
-            LoginErr::Unknown => UNKNOWN_ERR,
-            LoginErr::Reqwest(e) => return write!(f, "{}", e),
-            LoginErr::Anyhow(e) => return write!(f, "{}", e),
-            LoginErr::Other => "Other error", // Menambahkan kasus untuk LoginErr::Other
+        let s = match self {
+            LoginErr::ServerDownErr => SERVER_DOWN_ERR.to_owned(),
+            LoginErr::ServerDown500Err => SERVER_DOWN_500_ERR.to_owned(),
+            LoginErr::CaptchaFailedSolveErr => CAPTCHA_FAILED_SOLVE_ERR.to_owned(),
+            LoginErr::CaptchaUsedErr => CAPTCHA_USED_ERR.to_owned(),
+            LoginErr::CaptchaWgErr => CAPTCHA_WG_ERR.to_owned(),
+            LoginErr::RegErr => REG_ERR.to_owned(),
+            LoginErr::NicknameErr => NICKNAME_ERR.to_owned(),
+            LoginErr::KickedErr => KICKED_ERR.to_owned(),
+            LoginErr::UnknownErr => UNKNOWN_ERR.to_owned(),
+            LoginErr::Reqwest(e) => e.to_string(),
+            LoginErr::InvalidSession => "Invalid session".to_owned(),
         };
-        write!(f, "{}", message)
+        write!(f, "{}", s)
     }
 }
 
@@ -77,19 +66,19 @@ pub fn login(
     username: &str,
     password: &str,
     color: &str,
-    sxiv: bool,
     manual_captcha: bool,
+    sxiv: bool,
 ) -> Result<String, LoginErr> {
-    let login_url = format!("{}/{}", base_url, page_php);
+    // Get login page
+    let login_url = format!("{}/{}", &base_url, &page_php);
     let resp = client.get(&login_url).send()?;
-    
     if resp.status() == StatusCode::BAD_GATEWAY {
-        return Err(LoginErr::ServerDown);
+        return Err(LoginErr::ServerDownErr);
     }
-    
-    let resp_text = resp.text()?;
-    let doc = Document::from(resp_text.as_str());
+    let resp = resp.text()?;
+    let doc = Document::from(resp.as_str());
 
+    // Post login form
     let mut params = vec![
         ("action", "login".to_owned()),
         ("lang", LANG.to_owned()),
@@ -98,133 +87,163 @@ pub fn login(
         ("colour", color.to_owned()),
     ];
 
-    if let Some(captcha_node) = doc.find(And(Name("input"), Attr("name", "challenge"))).next() {
-        let captcha_value = captcha_node.attr("value").context("Captcha value not found")?;
-        let captcha_img = doc.find(Name("img")).next().context("Captcha image not found")?.attr("src").context("Captcha image source not found")?;
+    if let Some(captcha_node) = doc
+        .find(And(Name("input"), Attr("name", "challenge")))
+        .next()
+    {
+        let captcha_value = captcha_node.attr("value").unwrap();
+        let captcha_img = doc.find(Name("img")).next().unwrap().attr("src").unwrap();
 
-        let captcha_input = if manual_captcha {
-            handle_manual_captcha(captcha_img, sxiv)?
-        } else {
-            captcha::solve_b64(captcha_img).ok_or(LoginErr::CaptchaFailedSolve)?
-        };
+        let mut captcha_input = String::new();
+        if manual_captcha {
+            // Otherwise, save the captcha on disk and prompt user for answer
+            // println!("Captcha image source: {}", captcha_img);
+            // let img_decoded = general_purpose::STANDARD.decode(captcha_img.strip_prefix("data:image/gif;base64,").unwrap()).unwrap();
+            //
+            // Attempt to strip the appropriate prefix based on the MIME type
+            let base64_str =
+                if let Some(base64) = captcha_img.strip_prefix("data:image/png;base64,") {
+                    base64
+                } else if let Some(base64) = captcha_img.strip_prefix("data:image/gif;base64,") {
+                    base64
+                } else {
+                    panic!("Unexpected captcha image format. Expected PNG or GIF.");
+                };
+
+            // Decode the base64 string into binary image data
+            let img_decoded = general_purpose::STANDARD.decode(base64_str).unwrap();
+
+            //
+            let img = image::load_from_memory(&img_decoded).unwrap();
+            let img_buf = image::imageops::resize(
+                &img,
+                img.width() * 4,
+                img.height() * 4,
+                image::imageops::FilterType::Nearest,
+            );
+            // Save captcha as file on disk
+            img_buf.save("captcha.gif").unwrap();
+
+            if sxiv {
+                let mut sxiv_process = Command::new("sxiv")
+                    .arg("captcha.gif")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("Failed to open image with sxiv");
+
+                // Prompt the user to enter the CAPTCHA
+                print!("Please enter the CAPTCHA: ");
+                io::stdout().flush().unwrap();
+                io::stdin().read_line(&mut captcha_input).unwrap();
+                trim_newline(&mut captcha_input);
+
+                // Close the sxiv window
+                sxiv_process.kill().expect("Failed to close sxiv");
+
+                println!("Captcha input: {}", captcha_input);
+            } else {
+                termage::display_image("captcha.gif", img.width(), img.height());
+
+                // Enter captcha
+                print!("captcha: ");
+                io::stdout().flush().unwrap();
+                io::stdin().read_line(&mut captcha_input).unwrap();
+                trim_newline(&mut captcha_input);
+            }
+        }
+        //  else {
+        //     captcha_input = captcha::solve(captcha_img)
+        //         .map_err(|_| LoginErr::CaptchaFailedSolveErr)?;
+        // }
 
         params.extend(vec![
             ("challenge", captcha_value.to_owned()),
-            ("captcha", captcha_input),
+            ("captcha", captcha_input.clone()),
         ]);
     }
 
     let mut resp = client.post(&login_url).form(&params).send()?;
-    
     match resp.status() {
-        StatusCode::BAD_GATEWAY => return Err(LoginErr::ServerDown),
-        StatusCode::INTERNAL_SERVER_ERROR => return Err(LoginErr::ServerDown500),
+        StatusCode::BAD_GATEWAY => return Err(LoginErr::ServerDownErr),
+        StatusCode::INTERNAL_SERVER_ERROR => return Err(LoginErr::ServerDown500Err),
         _ => {}
     }
 
-    handle_refresh(client, base_url, &mut resp)?;
-
-    let resp_text = resp.text()?;
-    check_login_errors(&resp_text)?;
-
-    let doc = Document::from(resp_text.as_str());
-    let iframe = doc.find(Attr("name", "view")).next().context("View iframe not found")?;
-    let iframe_src = iframe.attr("src").context("Iframe source not found")?;
-
-    let session_captures = SESSION_RGX.captures(iframe_src).context("Session not found in iframe source")?;
-    let session = session_captures.get(1).context("Session capture group not found")?.as_str();
-    
-    Ok(session.to_owned())
-}
-
-fn handle_manual_captcha(captcha_img: &str, sxiv: bool) -> Result<String, LoginErr> {
-    let base64_str = captcha_img.strip_prefix("data:image/png;base64,")
-        .or_else(|| captcha_img.strip_prefix("data:image/png;base64,"))
-        .context("Unexpected captcha image format")?;
-
-    let img_decoded = general_purpose::STANDARD.decode(base64_str).context("Failed to decode base64 image")?;
-    let img = image::load_from_memory(&img_decoded).context("Failed to load image from memory")?;
-    let img_buf = image::imageops::resize(
-        &img,
-        img.width() * 4,
-        img.height() * 4,
-        image::imageops::FilterType::Nearest,
-    );
-    img_buf.save("captcha.gif").context("Failed to save captcha image")?;
-
-    let captcha_input = if sxiv {
-        display_captcha_sxiv()?
-    } else {
-        display_captcha_termage(&img)?
-    };
-
-    Ok(captcha_input)
-}
-
-fn display_captcha_sxiv() -> Result<String, LoginErr> {
-    let mut sxiv_process = Command::new("sxiv")
-        .arg("captcha.gif")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("Failed to open image with sxiv")?;
-
-    let mut captcha_input = String::new();
-    print!("Please enter the CAPTCHA: ");
-    io::stdout().flush().context("Failed to flush stdout")?;
-    io::stdin().read_line(&mut captcha_input).context("Failed to read CAPTCHA input")?;
-    trim_newline(&mut captcha_input);
-
-    sxiv_process.kill().context("Failed to close sxiv")?;
-
-    Ok(captcha_input)
-}
-
-fn display_captcha_termage(img: &DynamicImage) -> Result<String, LoginErr> {
-    termage::display_image("captcha.gif", img.width(), img.height());
-
-    let mut captcha_input = String::new();
-    print!("captcha: ");
-    io::stdout().flush().context("Failed to flush stdout")?;
-    io::stdin().read_line(&mut captcha_input).context("Failed to read CAPTCHA input")?;
-    trim_newline(&mut captcha_input);
-
-    Ok(captcha_input)
-}
-
-fn handle_refresh(client: &Client, base_url: &str, resp: &mut Response) -> Result<(), LoginErr> {
-    while let Some(refresh_header) = resp.headers().get("refresh").and_then(|v| v.to_str().ok()) {
+    let mut refresh_header = resp
+        .headers()
+        .get("refresh")
+        .map(|v| v.to_str().unwrap())
+        .unwrap_or("");
+    while refresh_header != "" {
         let rgx = Regex::new(r#"URL=(.+)"#).unwrap();
         let refresh_url = format!(
             "{}{}",
             base_url,
-            rgx.captures(refresh_header)
-                .context("Failed to capture refresh URL")?
+            rgx.captures(&refresh_header)
+                .unwrap()
                 .get(1)
-                .context("Failed to get refresh URL capture")?
+                .unwrap()
                 .as_str()
         );
-        println!("Waitroom enabled, waiting 10 seconds");
+        println!("waitroom enabled, wait 10sec");
         thread::sleep(Duration::from_secs(10));
-        *resp = client.get(refresh_url).send()?;
+        resp = client.get(refresh_url.clone()).send()?;
+        refresh_header = resp
+            .headers()
+            .get("refresh")
+            .map(|v| v.to_str().unwrap())
+            .unwrap_or("");
     }
-    Ok(())
-}
 
-fn check_login_errors(resp_text: &str) -> Result<(), LoginErr> {
-    if resp_text.contains(CAPTCHA_USED_ERR) {
-        Err(LoginErr::CaptchaUsed)
-    } else if resp_text.contains(CAPTCHA_WG_ERR) {
-        Err(LoginErr::CaptchaWrong)
-    } else if resp_text.contains(REG_ERR) {
-        Err(LoginErr::Registration)
-    } else if resp_text.contains(NICKNAME_ERR) {
-        Err(LoginErr::Nickname)
-    } else if resp_text.contains(KICKED_ERR) {
-        Err(LoginErr::Kicked)
-    } else {
-        Ok(())
+    let mut resp = resp.text()?;
+    if resp.contains(CAPTCHA_USED_ERR) {
+        return Err(LoginErr::CaptchaUsedErr);
+    } else if resp.contains(CAPTCHA_WG_ERR) {
+        return Err(LoginErr::CaptchaWgErr);
+    } else if resp.contains(REG_ERR) {
+        return Err(LoginErr::RegErr);
+    } else if resp.contains(NICKNAME_ERR) {
+        return Err(LoginErr::NicknameErr);
+    } else if resp.contains(KICKED_ERR) {
+        return Err(LoginErr::KickedErr);
     }
+
+    let mut doc = Document::from(resp.as_str());
+    if let Some(body) = doc.find(Name("body")).next() {
+        if let Some(body_class) = body.attr("class") {
+            if body_class == "error" {
+                if let Some(h2) = doc.find(Name("h2")).next() {
+                    log::error!("{}", h2.text());
+                }
+                return Err(LoginErr::UnknownErr);
+            } else if body_class == "failednotice" {
+                log::error!("failed logins: {}", body.text());
+                let nc = doc.find(Attr("name", "nc")).next().unwrap();
+                let nc_value = nc.attr("value").unwrap().to_owned();
+                let params: Vec<(&str, String)> = vec![
+                    ("lang", LANG.to_owned()),
+                    ("nc", nc_value.to_owned()),
+                    ("action", "login".to_owned()),
+                ];
+                resp = client.post(&login_url).form(&params).send()?.text()?;
+                doc = Document::from(resp.as_str());
+            }
+        }
+    }
+
+    let iframe = match doc.find(Attr("name", "view")).next() {
+        Some(view) => view,
+        None => {
+            fs::write("./dump_login_err.html", resp.as_str()).unwrap();
+            panic!("failed to get view iframe");
+        }
+    };
+    let iframe_src = iframe.attr("src").unwrap();
+
+    let session_captures = SESSION_RGX.captures(iframe_src).unwrap();
+    let session = session_captures.get(1).unwrap().as_str();
+    Ok(session.to_owned())
 }
 
 pub fn logout(
@@ -232,9 +251,9 @@ pub fn logout(
     base_url: &str,
     page_php: &str,
     session: &str,
-) -> Result<()> {
-    let full_url = format!("{}/{}", base_url, page_php);
-    let params = [("action", "logout"), ("session", session), ("lang", LANG)];
+) -> anyhow::Result<()> {
+    let full_url = format!("{}/{}", &base_url, &page_php);
+    let params = [("action", "logout"), ("session", &session), ("lang", LANG)];
     client.post(&full_url).form(&params).send()?;
     Ok(())
 }
