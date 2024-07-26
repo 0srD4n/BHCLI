@@ -1,7 +1,7 @@
 mod bhc;
 mod lechatphp;
 mod util;
-
+use std::fs::File;
 use crate::lechatphp::LoginErr;
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Datelike, NaiveDateTime, Utc};
@@ -191,7 +191,7 @@ struct LeChatPHPConfig {
 impl LeChatPHPConfig {
     fn new_black_hat_chat_config() -> Self {
         Self {
-            url: "http://blkhatjxlrvc5aevqzz5t6kxldayog6jlx5h7glnu44euzongl4fh5ad.onion".to_owned(),
+            url: "http://blkh4ylofapg42tj6ht565klld5i42dhjtysvsnnswte4xt4uvnfj5qd.onion".to_owned(),
             datetime_fmt: "%m-%d %H:%M:%S".to_owned(),
             page_php: "chat.php".to_owned(),
             keepalive_send_to: "0".to_owned(),
@@ -228,6 +228,7 @@ struct LeChatPHPClient {
     color_tx: crossbeam_channel::Sender<()>,
     color_rx: Arc<Mutex<crossbeam_channel::Receiver<()>>>,
 }
+
 
 impl LeChatPHPClient {
     fn run_forever(&mut self) {
@@ -267,12 +268,6 @@ impl LeChatPHPClient {
                             println!("Reqwest error: {}", err); // Print error message
                         }
                     }
-                    LoginErr::InvalidSession => {
-                        log::error!("Invalid session: {}", e);
-                        println!("Invalid session: {}", e); // Print error message
-                        self.session = None; // Reset session
-                        continue; // Try to login again
-                    }
                 },
 
                 Ok(()) => {
@@ -306,17 +301,15 @@ impl LeChatPHPClient {
     ) -> thread::JoinHandle<()> {
         let tx = self.tx.clone();
         let msg_actived = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let msg_actived_bot = format!(">>> Dantca patch update {} on system >> ..... configuration successful.. not error report > - < actived <<< |3 min removed |", msg_actived);
+        let msg_actived_bot = format!(">>> [color=#ffffff]Dantca patch update {} on system >> ..... configuration successful.. not error report > - < actived[/color] <<< |3 min removed |", msg_actived);
         tx.send(PostType::Post(msg_actived_bot.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
-        thread::sleep(Duration::from_secs(180));
-        tx.send(PostType::DeleteLast).unwrap();
         let send_to = self.config.keepalive_send_to.clone();
         thread::spawn(move || loop {
             let keep_msg = || {
                 let msg_keep = "[color=#ffffff]>>> H-E-L-L-O C-H-A-T-T-E-R-S W-E-L-C-O-M-E B-A-C-K TO BHC <<<[/color]
                 Keep it legal and enjoy your stay. 
-                you can try !-rules && !-help before. and follow the !-rules
-                                       auto massage";
+                You can try !-rules && !-help before. Please follow the !-rules
+                                       (Auto message)";
                 tx.send(PostType::Post(msg_keep.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
             };
             let clb = || {
@@ -340,7 +333,7 @@ impl LeChatPHPClient {
     }
 
 
-    // Thread that POST to chat server
+    //erver
     fn start_post_msg_thread(
         &self,
         exit_rx: crossbeam_channel::Receiver<ExitSignal>,
@@ -522,17 +515,23 @@ impl LeChatPHPClient {
     }
 
     fn login(&mut self) -> Result<(), LoginErr> {
-        // Menggunakan session yang diberikan
-        let session = "af779cd435c018dfc72e1d8e7cef7f07".to_string();
-        
-        // Validasi session (bisa ditambahkan sesuai kebutuhan)
-        if session.is_empty() {
-            return Err(LoginErr::InvalidSession);
+        // If we provided a session, skip login process
+        if self.session.is_some() {
+            // println!("Session in params: {:?}", self.session); 
+            return Ok(());
         }
-        
-        self.session = Some(session);
-        
-        // Jika session sudah diatur, lanjutkan
+        // println!("self.session is not Some");
+        // println!("self.sxiv = {:?}", self.sxiv);
+        self.session = Some(lechatphp::login(
+            &self.client,
+            &self.config.url,
+            &self.config.page_php,
+            &self.base_client.username,
+            &self.base_client.password,
+            &self.guest_color,
+            self.manual_captcha,
+            self.sxiv,
+        )?);
         Ok(())
     }
 
@@ -548,6 +547,7 @@ impl LeChatPHPClient {
         }
         Ok(())
     }
+
 
     fn start_cycle(&self, color_only: bool) {
         let username = self.base_client.username.clone();
@@ -812,7 +812,7 @@ impl LeChatPHPClient {
                 ..
             } => self.handle_normal_mode_key_event_translate(app, messages),
             KeyEvent {
-                code: KeyCode::Char('u'),
+                code: KeyCode::Char('l'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
             }
@@ -1259,7 +1259,7 @@ impl LeChatPHPClient {
         }
     }
 
-    //Strange
+    // Menerjemahkan teks yang dipilih ke bahasa Indonesia
     fn handle_normal_mode_key_event_translate(
         &mut self,
         app: &mut App,
@@ -1276,17 +1276,21 @@ impl LeChatPHPClient {
                     .arg("-b")
                     .arg(&original_text.text())
                     .output()
-                    .expect("Failed to execute translation command");
+                    .expect("Gagal mengeksekusi perintah terjemahan");
 
                 if output.status.success() {
                     if let Ok(new_text) = String::from_utf8(output.stdout) {
                         *original_text = StyledText::Text(new_text.trim().to_owned());
-                        log::error!("Translation successful: {}", new_text);
+                        log::error!("Terjemahan berhasil: {}", new_text);
+                        // Simpan hasil terjemahan ke file
+                        let mut file = File::create("translation_result.txt").expect("Tidak dapat membuat file");
+                        file.write_all(new_text.as_bytes()).expect("Tidak dapat menulis data");
+                        log::error!("Hasil terjemahan disimpan ke translation_result.txt");
                     } else {
-                        log::error!("Failed to decode translation output as UTF-8");
+                        log::error!("Gagal mendekode output terjemahan sebagai UTF-8");
                     }
                 } else {
-                    log::error!("Translation command failed with error: {:?}", output.status);
+                    log::error!("Perintah terjemahan gagal dengan error: {:?}", output.status);
                 }
             }
         }
@@ -1925,7 +1929,7 @@ fn get_msgs(
     Ok(())
 }
 fn process_new_messages(
-    new_messages: &Vec<Message>,
+    new_messages: &[Message],
     messages: &MutexGuard<Vec<Message>>,
     datetime_fmt: &str,
     members_tag: &str,
@@ -1937,85 +1941,62 @@ fn process_new_messages(
     if let Some(last_known_msg) = messages.first() {
         let last_known_msg_parsed_dt = parse_date(&last_known_msg.date, datetime_fmt);
         let filtered = new_messages.iter().filter(|new_msg| {
-            last_known_msg_parsed_dt <= parse_date(&new_msg.date, datetime_fmt)
-                && !(new_msg.date == last_known_msg.date && last_known_msg.text == new_msg.text)
+            parse_date(&new_msg.date, datetime_fmt) > last_known_msg_parsed_dt
+                || (new_msg.date == last_known_msg.date && last_known_msg.text != new_msg.text)
         });
+
         for new_msg in filtered {
             if let Some((from, to_opt, msg)) = get_message(&new_msg.text, members_tag) {
-                // Notifikasi ketika di-tag
-                if msg.contains(format!("@{}", &username).as_str()) {
-                    *should_notify = true;
-                }
-
-                // Notifikasi ketika menerima PM
-                if let Some(to) = to_opt {
-                    if to == username && msg != "!up" {
-                        *should_notify = true;
-                    }
-                }
+                // Notifikasi ketika di-tag atau menerima PM
+                *should_notify |= msg.contains(&format!("@{}", username)) 
+                    || (to_opt.as_ref().map_or(false, |to| to == username) && msg != "!up");
 
                 unsafe {
                     if BOT_ACTIVE {
                         let users_lock = users.lock().unwrap();
-                        dantca_imps_proses(&from, &msg, &tx, &users_lock);
+                        dantca_imps_proses(&from, &msg, tx, &users_lock);
                     }
                 }
 
                 // Proses perintah bot (hanya untuk anggota)
                 let users_lock = users.lock().unwrap();
-                if from == XPLDAN || users_lock.members.iter().any(|(_color, username)| username.to_lowercase() == from.to_lowercase()) {
-                    if msg.contains("dantcaoff!") {
-                        toggle_bot_active(false, &tx, &from);
+                if from == XPLDAN || users_lock.members.iter().any(|(_color, member)| member.to_lowercase() == from.to_lowercase()) {
+                    match msg.as_str() {
+                        "dantcaoff!" => toggle_bot_active(false, tx, &from),
+                        "dantcago!" => toggle_bot_active(true, tx, &from),
+                        "statusdan!" => check_bot_status(tx, &from),
+                        "dantcahelp!" => dantca_help(tx, &from),
+                        _ => {}
                     }
-                    if msg.contains("dantcago!") {
-                        toggle_bot_active(true, &tx, &from);
-                    }
-                    if msg.contains("statusdan!") {
-                        check_bot_status(&tx, &from);
-                    }
+                }
+                if msg.to_lowercase().contains("reportdan!") {
+                    report_dantca(tx, &from);
                 }
             }
         }
     }
-
-    // Fitur deteksi spam dan flood
-    let mut message_count = HashMap::new();
-    let mut last_message_time = HashMap::new();
-    let mut warning_count = HashMap::new();
-    let spam_threshold = 5;
-    let flood_interval = Duration::from_secs(10);
-    let max_warnings = 2;
-
-    let users_lock = users.lock().unwrap();
-    for (_color, username) in &users_lock.guests {
-        let count = message_count.entry(username).or_insert(0);
-        *count += 1;
-
-        let now = Instant::now();
-        if let Some(last_time) = last_message_time.get(username) {
-            if now.duration_since(*last_time) < flood_interval {
-                if *count > spam_threshold {
-                    let warnings = warning_count.entry(username.to_owned()).or_insert(0);
-                    *warnings += 1;
-                    
-                    if *warnings > max_warnings {
-                        let msg = format!("Terdeteksi spam/flood dari pengguna '{}'. Anda telah diperingatkan beberapa kali. Anda sekarang dikeluarkan.", username);
-                        tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
-                        message_count.remove(username);
-                        last_message_time.remove(username);
-                        warning_count.remove(username);
-                    } else {
-                        let warning_msg = format!("Peringatan: Terdeteksi potensi spam/flood dari pengguna '{}'. Harap kurangi kecepatan mengirim pesan. Peringatan {}/{}.", username, warnings, max_warnings);
-                        tx.send(PostType::Post(warning_msg, Some(SEND_TO_ALL.to_owned()))).unwrap();
-                        *count = 0; // Reset count setelah peringatan
-                    }
-                }
-            } else {
-                *count = 1;
-            }
-        }
-        last_message_time.insert(username.to_owned(), now);
+}
+fn report_dantca(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
+    if from != XPLDAN {
+        let report_message = format!("Hallo @{}, to send PM to Dantca bot you can click the '-All chatters-' box above the chat, and select user @XplDan for contact github: @0srd4n, proton: Xpldan@proton.me. or you can donation to my BTC address: [comming soon] ", from);
+        tx.send(PostType::Post(report_message, Some(from.to_owned()))).unwrap();
     }
+}
+
+fn dantca_help(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
+    if from != XPLDAN{
+        let help_message = format!("
+        [color=#ffffff]>Hallo @{}, there is guide for Dantca bot
+    dantcago!-! = Active Dantca Bot
+    dantcaoff!-! = Deactive Dantca Bot
+    statusdan!-! = Check Dantca Bot Status
+    dantcahelp!-! = Dantca Bot Help
+    reportdan-! = for report to Dantca bot
+    without ( ! )<[/color]", from);
+    tx.send(PostType::Post(help_message, Some(SEND_TO_MEMBERS.to_owned())
+    )).unwrap();
+    }
+
 }
 
 fn toggle_bot_active(active: bool, tx: &crossbeam_channel::Sender<PostType>, from: &str) {
@@ -2025,7 +2006,7 @@ fn toggle_bot_active(active: bool, tx: &crossbeam_channel::Sender<PostType>, fro
     let status_message = if active {
         format!("[color=#ffffff]>[] -- Dantca Actived By @{} -- []<[/color] ", from)
     } else {
-        format!("[color=#ffffff]>[] -- Dantca Deactived By @{} -- []<[/color] ", from)
+        format!("[color=#ffffff]>[] -- Dantca Deactived By @{} -- []<[/color]", from)
     };
     tx.send(PostType::Post(status_message, None)).unwrap();
 }
@@ -2037,54 +2018,57 @@ fn check_bot_status(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
     } else {
         "> - Dantca Not Running - <"
     };
-    let messtats = format!(" {} == [ @{} ]", status_message, from);
-    tx.send(PostType::Post(messtats, None)).unwrap();
+    let messtats = format!(" [color=#ffffff] {} == [/color] [ @{} ]", status_message, from);
+    tx.send(PostType::Post(messtats, Some(SEND_TO_ALL.to_owned()))).unwrap();
 }
 
 fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
-    let msg = msg.to_lowercase();
-    let from = from.to_lowercase();
-    for (_color, username) in &users.guests {
-        if from == username.to_lowercase().as_str() {
-            let username_to_kick = from.to_owned();
-            let (triggered, kicked, warns) = check_message_content(&msg);
-            
-            let mut warned_users = WARNED_USERS.lock().unwrap();
-            let count = warned_users.entry(from.to_owned()).or_insert(0);
-            if triggered {
-                *count += 1;
-                tx.send(PostType::Post(format!("-> Hallo @{} -> your warns: [color=#ffffff]you have warns[/color] [color=#00FF00]| {}/2 |[/color] -> {} -< ", username_to_kick, *count, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
-            }
-            if *count >= 2 {
-                tx.send(PostType::Kick(format!("hallo  @{}, [color=#ffffff]You have been warned multiple waarns[/color] [color=#00FF00]| = {} = |[/color] [color=#FF0000]times[/color] [color=#00FF00]and are now being kicked.[/color]", username_to_kick, *count), username_to_kick.clone())).unwrap();
-            }
-            if kicked {
-                let msg = format!("-> [color=#ffffff]Hallo[/color] @{} -> your warns: [color=#ffffff]{}[/color] [color=#f734ee][BANNED TOPIC][/color] -< ", username_to_kick, warns);
-                tx.send(PostType::Post(msg, Some(SEND_TO_ALL.to_owned()))).unwrap();
-            }
-            if msg.contains("chat?") || msg.contains("what about chat?") {
-                tx.send(PostType::Post(format!("Halo, @{} !about", from), Some(SEND_TO_ALL.to_owned()))).unwrap();
-            } else if msg.contains("bhcli") {
-                tx.send(PostType::Post(format!("hallo, @{} -> {}", from, BHCLI_BLOG_URL), None)).unwrap();
-            } else if msg.contains("i new here") || msg.contains("im new here") {
-                tx.send(PostType::Post(format!("[color=#ffffff]Hallo,@{} Welcome the Black Hat Chat You can try !-help and !-newmembers to more informations.-< [/color]", from), None)).unwrap();
-            } else if msg.contains("learn programming") || msg.contains("learn python") || msg.contains("how can i start hacking") {
-                tx.send(PostType::Post(format!("Halo @{} you can try !-learn!-ctf ~Dantca bot", from), Some(SEND_TO_ALL.to_owned()))).unwrap();
-            } else if msg.contains("!-help") || msg.contains("how to send @0?") || msg.contains("list of commands") {
-                tx.send(PostType::Post(format!("[color=#ffffff][bold]Hello @{} This command can be sent to user @0 so as not to pollute the chat. To send a message to a user, click the '-All chatters-' box above the chat, and select user @0.[/bold][/color]", from), Some(SEND_TO_ALL.to_owned()))).unwrap();
-            } else if msg.contains("red room") || msg.contains("redroom") || msg.contains("link red room") || msg.contains("link redroom") {
-                tx.send(PostType::Post(format!("Halo @{},!redroom", from), Some(SEND_TO_ALL.to_owned()))).unwrap();
-            } else if msg.contains("pedo") || msg.contains("hacking services") || msg.contains("child porn") || msg.contains("fuck all") || msg.contains("fuck off") || msg.contains("gore video") || msg.contains("link gore") || msg.contains("+62") || msg.contains("nigger") || msg.contains("stupid all") || msg.contains("nigga") || msg.contains("masturbate") || msg.contains(" CP ") || msg.contains("link cp") || msg.contains("horny")  || msg.contains("porn video") {
-                let username_to_kick = from.to_owned();
-                tx.send(PostType::Kick(format!("!! dont break the rules you can try !-help or !-rules blacklist word '{}'  ~bot XplDan", msg), username_to_kick)).unwrap();
-            } else if (msg.contains("links") || msg.contains("dark web link") || msg.contains("link dark web")) && (
-                msg.contains("where ") || msg.contains("want ") || msg.contains("lookin") || msg.contains("know ") || msg.contains("have ") || msg.contains("need ")
-            ) {
-                tx.send(PostType::Post(format!("hallo @{} you can try !-links and send to @0", from), None)).unwrap();
-            }
+    let msg_lower = msg.to_lowercase();
+    let from_lower = from.to_lowercase();
+    
+    if let Some((_color, _username)) = users.guests.iter().find(|(_color, name)| name.to_lowercase() == from_lower) {
+        let username_to_kick = from_lower.clone();
+        let (triggered, kicked, warns) = check_message_content(&msg_lower);
+        
+        let mut warned_users = WARNED_USERS.lock().unwrap();
+        let count = warned_users.entry(from_lower.clone()).or_insert(0);
+        
+        if triggered {
+            *count += 1;
+            tx.send(PostType::Post(format!("-> Hallo @{} ->  [color=#ffffff]you have warns : [/color] [color=#00FF00]| {}/2 |[/color] -> Your Warnings :  {} [BANNED TOPIC]-< [LAST WARNS] ", username_to_kick, *count, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
+        }
+        
+        if *count >= 2 {
+            tx.send(PostType::Kick(format!("hallo  @{}, You have been warned multiple waarns | = {} = |times and are now being kicked.", username_to_kick, *count), username_to_kick.clone())).unwrap();
+        }
+        
+        if kicked {
+            tx.send(PostType::Post(format!("->Hallo ,@{} -> your warnings: {} [BANNED TOPIC]-< ", username_to_kick, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
+        }
+        
+        // Menggunakan match untuk menangani berbagai kasus pesan
+        match msg_lower.as_str() {
+            m if m.contains("chat?") || m.contains("what about chat?") => 
+                tx.send(PostType::Post(format!("Halo, @{} !about", from), Some(SEND_TO_ALL.to_owned()))).unwrap(),
+            m if m.contains("bhcli") => 
+                tx.send(PostType::Post(format!("hallo, @{} -> {}", from, BHCLI_BLOG_URL), None)).unwrap(),
+            m if m.contains("i new here") || m.contains("im new here") => 
+                tx.send(PostType::Post(format!("[color=#ffffff]Hallo,@{} Welcome the Black Hat Chat You can try !-help and !-newmembers to more informations.-< [/color]", from), None)).unwrap(),
+            m if m.contains("learn programming") || m.contains("learn python") || m.contains("how can i start hacking") => 
+                tx.send(PostType::Post(format!("Halo @{} you can try !-learn!-ctf ~Dantca bot", from), Some(SEND_TO_ALL.to_owned()))).unwrap(),
+            m if m.contains("!-help") || m.contains("how to send @0?") || m.contains("list of commands") => 
+                tx.send(PostType::Post(format!("[color=#ffffff]Hello @{} This command can be sent to user @0 so as not to pollute the chat. To send a message to a user, click the '-All chatters-' box above the chat, and select user @0.[/color]", from), Some(SEND_TO_ALL.to_owned()))).unwrap(),
+            m if m.contains("red room") || m.contains("redroom") || m.contains("link red room") || m.contains("link redroom") => 
+                tx.send(PostType::Post(format!("Halo @{},!redroom", from), Some(SEND_TO_ALL.to_owned()))).unwrap(),
+            m if m.contains("pedo") || m.contains("hacking services") || m.contains("child porn") || m.contains("fuck all") || m.contains("fuck off") || m.contains("gore video") || m.contains("link gore") || m.contains("+62") || m.contains("nigger") || m.contains("stupid all") || m.contains("nigga") || m.contains("masturbate") || m.contains(" CP ") || m.contains("link cp") || m.contains("horny")  || m.contains("porn video") => 
+                tx.send(PostType::Kick(format!("!! dont break the rules you can try !-help or !-rules blacklist word '{}'  ~bot XplDan", m), username_to_kick)).unwrap(),
+            m if (m.contains("links") || m.contains("dark web link") || m.contains("link dark web")) && (m.contains("where ") || m.contains("want ") || m.contains("lookin") || m.contains("know ") || m.contains("have ") || m.contains("need ")) => 
+                tx.send(PostType::Post(format!("hallo @{} you can try !-links and send to @0", from), None)).unwrap(),
+            _ => {}
         }
     }
 }
+
 fn check_message_content(msg: &str) -> (bool, bool, &str) {
     let msgcopy = msg.to_lowercase();
     let mut triggered = false;

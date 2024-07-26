@@ -21,14 +21,13 @@ pub mod captcha;
 pub enum LoginErr {
     ServerDownErr,
     ServerDown500Err,
-    CaptchaFailedSolveErr, // Ketika auto-solver gagal memecahkan captcha bawaan lechatphp
+    CaptchaFailedSolveErr, // When auto-solver failed to solve the lechatphp built-in captcha
     CaptchaUsedErr,
     CaptchaWgErr,
     RegErr,
     NicknameErr,
     KickedErr,
     UnknownErr,
-    InvalidSession,
     Reqwest(reqwest::Error),
 }
 
@@ -51,7 +50,6 @@ impl Display for LoginErr {
             LoginErr::KickedErr => KICKED_ERR.to_owned(),
             LoginErr::UnknownErr => UNKNOWN_ERR.to_owned(),
             LoginErr::Reqwest(e) => e.to_string(),
-            LoginErr::InvalidSession => "Invalid session".to_owned(),
         };
         write!(f, "{}", s)
     }
@@ -151,11 +149,10 @@ pub fn login(
                 io::stdin().read_line(&mut captcha_input).unwrap();
                 trim_newline(&mut captcha_input);
             }
+        } else {
+            captcha_input =
+                captcha::solve_b64(captcha_img).ok_or(LoginErr::CaptchaFailedSolveErr)?;
         }
-        //  else {
-        //     captcha_input = captcha::solve(captcha_img)
-        //         .map_err(|_| LoginErr::CaptchaFailedSolveErr)?;
-        // }
 
         params.extend(vec![
             ("challenge", captcha_value.to_owned()),
