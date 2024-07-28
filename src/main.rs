@@ -1,13 +1,13 @@
 mod bhc;
 mod lechatphp;
 mod util;
-use std::fs::File;
 use crate::lechatphp::LoginErr;
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Datelike, NaiveDateTime, Utc};
 use clap::Parser;
 use clipboard::ClipboardContext;
 use clipboard::ClipboardProvider;
+use std::collections::HashSet;
 use colors_transform::{Color, Rgb};
 use crossbeam_channel::{self, after, select};
 use crossterm::event;
@@ -43,7 +43,6 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use tui::layout::Rect;
-use chrono::Local;
 use tui::style::Color as tuiColor;
 use tui::{
     backend::CrosstermBackend,
@@ -300,9 +299,8 @@ impl LeChatPHPClient {
         last_post_rx: crossbeam_channel::Receiver<()>,
     ) -> thread::JoinHandle<()> {
         let tx = self.tx.clone();
-        let msg_actived = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let msg_actived_bot = format!(">>> [color=#ffffff]Dantca patch update {} on system >> ..... configuration successful.. not error report > - < actived[/color] <<< |3 min removed |", msg_actived);
-        tx.send(PostType::Post(msg_actived_bot.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
+        // let msg_actived_bot = format!(">>> [color=#ffffff]Dantca patch update on system >> ..... configuration successful.. not error report > - < actived[/color] <<< |3 min removed |");
+        // tx.send(PostType::Post(msg_actived_bot.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
         let send_to = self.config.keepalive_send_to.clone();
         thread::spawn(move || loop {
             let keep_msg = || {
@@ -810,16 +808,6 @@ impl LeChatPHPClient {
                 code: KeyCode::Char('T'),
                 modifiers: KeyModifiers::SHIFT,
                 ..
-            } => self.handle_normal_mode_key_event_translate(app, messages),
-            KeyEvent {
-                code: KeyCode::Char('l'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::PageUp,
-                modifiers: KeyModifiers::NONE,
-                ..
             } => self.handle_normal_mode_key_event_page_up(app),
             KeyEvent {
                 code: KeyCode::Char('d'),
@@ -1259,43 +1247,7 @@ impl LeChatPHPClient {
         }
     }
 
-    // Menerjemahkan teks yang dipilih ke bahasa Indonesia
-    fn handle_normal_mode_key_event_translate(
-        &mut self,
-        app: &mut App,
-        messages: &Arc<Mutex<Vec<Message>>>,
-    ) {
-        log::error!("translate running");
-        if let Some(idx) = app.items.state.selected() {
-            log::error!("1353");
-            let mut message_lock = messages.lock().unwrap();
-            if let Some(message) = message_lock.get_mut(idx) {
-                log::error!("1356");
-                let original_text = &mut message.text;
-                let output = Command::new("trans")
-                    .arg("-b")
-                    .arg(&original_text.text())
-                    .output()
-                    .expect("Gagal mengeksekusi perintah terjemahan");
-
-                if output.status.success() {
-                    if let Ok(new_text) = String::from_utf8(output.stdout) {
-                        *original_text = StyledText::Text(new_text.trim().to_owned());
-                        log::error!("Terjemahan berhasil: {}", new_text);
-                        // Simpan hasil terjemahan ke file
-                        let mut file = File::create("translation_result.txt").expect("Tidak dapat membuat file");
-                        file.write_all(new_text.as_bytes()).expect("Tidak dapat menulis data");
-                        log::error!("Hasil terjemahan disimpan ke translation_result.txt");
-                    } else {
-                        log::error!("Gagal mendekode output terjemahan sebagai UTF-8");
-                    }
-                } else {
-                    log::error!("Perintah terjemahan gagal dengan error: {:?}", output.status);
-                }
-            }
-        }
-    }
-
+   
     //Strange
     fn handle_normal_mode_key_event_warn(&mut self, app: &mut App) {
         if let Some(idx) = app.items.state.selected() {
@@ -1938,6 +1890,22 @@ fn process_new_messages(
     tx: &crossbeam_channel::Sender<PostType>,
     users: &Arc<Mutex<Users>>,
 ) {
+    // Inisialisasi struktur data untuk menyimpan nama-nama pengguna
+    lazy_static! {
+        static ref KNOWN_USERS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+    }
+
+    // Fungsi untuk memeriksa apakah pengguna baru
+    fn is_new_user(username: &str) -> bool {
+        let mut known_users = KNOWN_USERS.lock().unwrap();
+        if known_users.contains(username) {
+            false
+        } else {
+            known_users.insert(username.to_string());
+            true
+        }
+    }
+
     if let Some(last_known_msg) = messages.first() {
         let last_known_msg_parsed_dt = parse_date(&last_known_msg.date, datetime_fmt);
         let filtered = new_messages.iter().filter(|new_msg| {
@@ -1946,8 +1914,22 @@ fn process_new_messages(
         });
 
         for new_msg in filtered {
+            if new_msg.typ == MessageType::SysMsg {
+                let system_msg = new_msg.text.text();
+                if system_msg.contains("entered the chat.") {
+                    if let Some(entered_username) = system_msg.split_whitespace().nth(1) {
+                        if is_new_user(entered_username) {
+                            let welcome_msg = format!(
+                                "[color=#00FF00]Welcome back @{} !![/color]",
+                                entered_username
+                            );
+                            tx.send(PostType::Post(welcome_msg, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
+                        }
+                    }
+                }
+            }
+
             if let Some((from, to_opt, msg)) = get_message(&new_msg.text, members_tag) {
-                // Notifikasi ketika di-tag atau menerima PM
                 *should_notify |= msg.contains(&format!("@{}", username)) 
                     || (to_opt.as_ref().map_or(false, |to| to == username) && msg != "!up");
 
@@ -1958,7 +1940,6 @@ fn process_new_messages(
                     }
                 }
 
-                // Proses perintah bot (hanya untuk anggota)
                 let users_lock = users.lock().unwrap();
                 if from == XPLDAN || users_lock.members.iter().any(|(_color, member)| member.to_lowercase() == from.to_lowercase()) {
                     match msg.as_str() {
@@ -1976,6 +1957,7 @@ fn process_new_messages(
         }
     }
 }
+
 fn report_dantca(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
     if from != XPLDAN {
         let report_message = format!("Hallo @{}, to send PM to Dantca bot you can click the '-All chatters-' box above the chat, and select user @XplDan for contact github: @0srd4n, proton: Xpldan@proton.me. or you can donation to my BTC address: [comming soon] ", from);
@@ -1984,18 +1966,16 @@ fn report_dantca(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
 }
 
 fn dantca_help(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
-    if from != XPLDAN{
         let help_message = format!("
-        [color=#ffffff]>Hallo @{}, there is guide for Dantca bot
-    dantcago!-! = Active Dantca Bot
-    dantcaoff!-! = Deactive Dantca Bot
-    statusdan!-! = Check Dantca Bot Status
-    dantcahelp!-! = Dantca Bot Help
+    Hallo @{}, there is guide for Dantca bot
+    dantcago-! = Active Dantca Bot
+    dantcaoff-! = Deactive Dantca Bot
+    statusdan-! = Check Dantca Bot Status
+    dantcahelp-! = Dantca Bot Help
     reportdan-! = for report to Dantca bot
-    without ( ! )<[/color]", from);
+    without ( - )", from);
     tx.send(PostType::Post(help_message, Some(SEND_TO_MEMBERS.to_owned())
     )).unwrap();
-    }
 
 }
 
@@ -2023,6 +2003,7 @@ fn check_bot_status(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
 }
 
 fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
+
     let msg_lower = msg.to_lowercase();
     let from_lower = from.to_lowercase();
     
@@ -2035,15 +2016,15 @@ fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<Post
         
         if triggered {
             *count += 1;
-            tx.send(PostType::Post(format!("-> Hallo @{} ->  [color=#ffffff]you have warns : [/color] [color=#00FF00]| {}/2 |[/color] -> Your Warnings :  {} [BANNED TOPIC]-< [LAST WARNS] ", username_to_kick, *count, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
+            tx.send(PostType::Post(format!(">>> Dantca :  Hallo @{}, ->  [color=#ffffff]you have warns : [/color] [color=#00FF00]| {}/2 |[/color] -> Your Warnings :  {} [BANNED TOPIC]-< [LAST WARNS] <<<", username_to_kick, *count, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
         }
         
         if *count >= 2 {
-            tx.send(PostType::Kick(format!("hallo  @{}, You have been warned multiple waarns | = {} = |times and are now being kicked.", username_to_kick, *count), username_to_kick.clone())).unwrap();
+            tx.send(PostType::Kick(format!(">>> Dantca : Hallo  @{}, You have been warned multiple waarns | = {} = |times and are now being kicked. <<< ", username_to_kick, *count), username_to_kick.clone())).unwrap();
         }
         
         if kicked {
-            tx.send(PostType::Post(format!("->Hallo ,@{} -> your warnings: {} [BANNED TOPIC]-< ", username_to_kick, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
+            tx.send(PostType::Post(format!(">>> Dantca : Hallo ,@{} -> your warnings: {} [BANNED TOPIC]-< <<<", username_to_kick, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
         }
         
         // Menggunakan match untuk menangani berbagai kasus pesan
@@ -2337,82 +2318,58 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
 }
 fn ban_imposters(tx: &crossbeam_channel::Sender<PostType>, account_username: &str, users: &Users) {
     if BAN_IMPOSTERS {
-        // Bot untuk nama yang aneh-aneh
-        if users.admin.len() == 0 && (users.staff.len() == 0 || account_username == XPLDAN) {
-            let n0tr1v_rgx = Regex::new(r#"n[o0]tr[1il][vy]"#).unwrap(); // o 0 | 1 i l | v y
-            let hitler_rgx = Regex::new(r#"h[i1l]t[l1]er"#).unwrap();
-            let himmler_rgx = Regex::new(r#"h[i1]m+l[e3]r"#).unwrap();
-            let mengele_rgx = Regex::new(r#"m[e3]ng[e3]l[e3]"#).unwrap();
-            let goebbels_rgx = Regex::new(r#"g[o0][e|3]b+[e3]ls"#).unwrap();
-            let heydrich_rgx = Regex::new(r#"h[e3]ydr[i1]ch"#).unwrap();
-            let globocnik_rgx = Regex::new(r#"gl[o0]b[o0]cn[i1l]k"#).unwrap();
-            let dirlewanger_rgx = Regex::new(r#"d[i1]rl[e3]wang[e3]r"#).unwrap();
-            let jeckeln_rgx = Regex::new(r#"j[e3]ck[e3]ln"#).unwrap();
-            let kramer_rgx = Regex::new(r#"kram[e3]r"#).unwrap();
-            let blobel_rgx = Regex::new(r#"bl[o0]b[e3]l"#).unwrap();
-            let stangl_rgx = Regex::new(r#"stangl"#).unwrap();
 
-            // Fungsi untuk memeriksa apakah nama mengandung kata terlarang
-            fn contains_banned_word(name: &str, word: &str) -> bool {
-                let name = name.to_lowercase();
-                name == word || name.starts_with(word) || name.ends_with(word) || name.contains(&format!("{}.", word)) || name.contains(&format!(".{}", word))
-            }
-
-            for (_color, username) in &users.guests {
-                let lower_name = username.to_lowercase();
-                for (_color, member) in &users.members {
-                    let member_lower = member.to_lowercase();
-                    if lower_name.contains(&member_lower) {
-                        let msg = format!("Username members BHC '{}' is not allowed.", username);
-                        tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
-                    }
-                }
-                
-                // Nama-nama yang akan di-ban oleh siapa pun yang menggunakan bhcli
-                let banned_keywords = [
-                    "pedo", "cp", "danbyt", "bigdick", "bitch", "kill", "killer", "\ndick\n", "trolls",
-                    "child porn", "hamas", "pussy", "cum", "pedofile", "fucked", "lolita slaves",
-                    "fuck all", "fucking", "bomb", "fuckings"
-                ];
-                if n0tr1v_rgx.is_match(&lower_name) || banned_keywords.iter().any(|&word| contains_banned_word(&lower_name, word)) {
-                    let msg = format!("Do not use names on the blacklist '{}'.", lower_name);
-                    tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
-                }
-                if account_username == XPLDAN {
-                    let banned_words = [
-                        "fuck", "xpldan", "niggi", "niggu", "nigge", "nigga", "niggo",
-                        "nigi", "nigu", "niga", "nigo", "niqq", "chink", "wank", "shit",
-                        "cunt", "bitch", "booty", "hooker", "milf", "rapist", "balls",
-                        "sex", "cocaine", "heroine", "weed", "drug", "card", "fisting",
-                        "jerk", "p3do", "pedo", "cplove", "perv", "gangbang", "porn",
-                        "dick", "penis", "puzzy", "pussy", "boceta", "anal", "cum",
-                        "market", "sell", "fraud", "DN37R34P3R", "atomwaffen", "altright"
-                    ];
-
-                    if banned_words.iter().any(|&word| contains_banned_word(&lower_name, word)) 
-                        || hitler_rgx.is_match(&lower_name)
-                        || goebbels_rgx.is_match(&lower_name)
-                        || himmler_rgx.is_match(&lower_name)
-                        || mengele_rgx.is_match(&lower_name)
-                        || heydrich_rgx.is_match(&lower_name)
-                        || globocnik_rgx.is_match(&lower_name)
-                        || dirlewanger_rgx.is_match(&lower_name)
-                        || jeckeln_rgx.is_match(&lower_name)
-                        || kramer_rgx.is_match(&lower_name)
-                        || blobel_rgx.is_match(&lower_name)
-                        || stangl_rgx.is_match(&lower_name)
-                    {
-                        let msg = format!("Do not use names that are on the blacklist '{}'  bot ~Dantca", lower_name);
-                        let username = username.to_owned();
-                        tx.send(PostType::Kick(msg, username)).unwrap();
-                    }
-                }
-            }
-        }
+    // Hanya jalankan jika tidak ada admin atau staff (kecuali XPLDAN)
+    if !users.admin.is_empty() || (!users.staff.is_empty() && account_username != XPLDAN) {
+        return;
     }
 
- 
+    let banned_patterns = [
+        (Regex::new(r"(?i)n[o0]tr[1il][vy]").unwrap(), "n0tr1v"),
+        (Regex::new(r"(?i)h[i1]t[l1]er").unwrap(), "hitler"),
+        (Regex::new(r"(?i)h[i1]m+l[e3]r").unwrap(), "himmler"),
+        (Regex::new(r"(?i)m[e3]ng[e3]l[e3]").unwrap(), "mengele"),
+        (Regex::new(r"(?i)g[o0][e3]b+[e3]ls").unwrap(), "goebbels"),
+        (Regex::new(r"(?i)h[e3]ydr[i1]ch").unwrap(), "heydrich"),
+        (Regex::new(r"(?i)gl[o0]b[o0]cn[i1l]k").unwrap(), "globocnik"),
+        (Regex::new(r"(?i)d[i1]rl[e3]wang[e3]r").unwrap(), "dirlewanger"),
+        (Regex::new(r"(?i)j[e3]ck[e3]ln").unwrap(), "jeckeln"),
+        (Regex::new(r"(?i)kram[e3]r").unwrap(), "kramer"),
+        (Regex::new(r"(?i)bl[o0]b[e3]l").unwrap(), "blobel"),
+        (Regex::new(r"(?i)stangl").unwrap(), "stangl"),
+        (Regex::new(r"(?i)\b(pedo|cp|danbyt|bigdick|bitch|kill|killer|dick|trolls|child\s*porn|hamas|pussy|cum|pedofile|fucked|lolita\s*slaves|fuck\s*all|fucking|bomb|fuckings)\b").unwrap(), "general blacklist"),
+    ];
+
+    let xpldan_patterns = Regex::new(r"(?i)\b(fuck|xpldan|nigg[iuaoe]|nig[iuao]|niqq|chink|wank|shit|cunt|bitch|booty|hooker|milf|rapist|balls|sex|cocaine|heroine|weed|drug|card|fisting|jerk|p3do|pedo|cplove|perv|gangbang|porn|dick|penis|puzzy|pussy|boceta|anal|cum|market|sell|fraud|DN37R34P3R|atomwaffen|altright)\b").unwrap();
+
+    for (_color, username) in &users.guests {
+        let lower_name = username.to_lowercase();
+
+        // Cek nama member
+        if users.members.iter().any(|(_, member)| lower_name.contains(&member.to_lowercase())) {
+            let msg = format!("Username members BHC '{}' is not allowed.", username);
+            tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
+            continue;
+        }
+
+        // Cek pola yang dilarang
+        for (pattern, name) in &banned_patterns {
+            if pattern.is_match(&lower_name) {
+                let msg = format!("Do not use names on the blacklist '{}' ({}).", lower_name, name);
+                tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
+                break;
+            }
+        }
+
+        // Cek pola tambahan untuk XPLDAN
+        if account_username == XPLDAN && xpldan_patterns.is_match(&lower_name) {
+            let msg = format!("Do not use names that are on the blacklist '{}' bot ~Dantca", lower_name);
+            tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
+        }
+    }
 }
+}
+
 fn update_messages(
     new_messages: Vec<Message>,
     mut messages: MutexGuard<Vec<Message>>,
@@ -2898,7 +2855,7 @@ fn get_username(own_username: &str, root: &StyledText, members_tag: &str) -> Opt
 }
 
 // Extract "from"/"to"/"message content" from a "StyledText"
-fn get_message(root: &StyledText, members_tag: &str) -> Option<(String, Option<String>, String)> {
+fn get_message(root: &StyledText, members_tag: &str ) -> Option<(String, Option<String>, String)> {
     if let StyledText::Styled(_, children) = root {
         let msg = children.get(0)?.text();
         match children.get(children.len() - 1)? {
@@ -3186,33 +3143,30 @@ fn remove_prefix<'a>(s: &'a str, prefix: &str) -> &'a str {
 }
 
 fn extract_messages(doc: &Document) -> anyhow::Result<Vec<Message>> {
-    let msgs = doc
-        .find(Attr("id", "messages"))
+    Ok(doc.find(Attr("id", "messages"))
         .next()
-        .ok_or(anyhow!("failed to get messages div"))?
+        .ok_or_else(|| anyhow!("Gagal mendapatkan div pesan"))?
         .find(Attr("class", "msg"))
         .filter_map(|tag| {
-            let mut id: Option<usize> = None;
-            if let Some(checkbox) = tag.find(Name("input")).next() {
-                let id_value: usize = checkbox.attr("value").unwrap().parse().unwrap();
-                id = Some(id_value);
-            }
-            if let Some(date_node) = tag.find(Name("small")).next() {
-                if let Some(msg_span) = tag.find(Name("span")).next() {
-                    let date = remove_suffix(&date_node.text(), " - ").to_owned();
-                    let typ = match msg_span.attr("class") {
-                        Some("usermsg") => MessageType::UserMsg,
-                        Some("sysmsg") => MessageType::SysMsg,
-                        _ => return None,
-                    };
-                    let (text, upload_link) = process_node(msg_span, tuiColor::White);
-                    return Some(Message::new(id, typ, date, upload_link, text));
-                }
-            }
-            None
+            let id = tag.find(Name("input"))
+                .next()
+                .and_then(|checkbox| checkbox.attr("value"))
+                .and_then(|value| value.parse().ok());
+
+            let date_node = tag.find(Name("small")).next()?;
+            let msg_span = tag.find(Name("span")).next()?;
+
+            let date = remove_suffix(&date_node.text(), " - ").to_owned();
+            let typ = match msg_span.attr("class") {
+                Some("usermsg") => MessageType::UserMsg,
+                Some("sysmsg") => MessageType::SysMsg,
+                _ => return None,
+            };
+
+            let (text, upload_link) = process_node(msg_span, tuiColor::White);
+            Some(Message::new(id, typ, date, upload_link, text))
         })
-        .collect::<Vec<_>>();
-    Ok(msgs)
+        .collect())
 }
 
 fn draw_terminal_frame(
@@ -3506,7 +3460,7 @@ fn render_messages(
             };
             let mut spans_vec = vec![Span::styled(m.date.clone(), date_style)];
             let show_sys_sep = app.show_sys && m.typ == MessageType::SysMsg;
-            let sep = if show_sys_sep { " * " } else { " - " };
+            let sep = if show_sys_sep { " * " } else { " -=- " };
             spans_vec.push(Span::raw(sep));
             for (idx, line) in new_lines.into_iter().enumerate() {
                 // Spams can take your whole screen, so we limit to 5 lines.
@@ -3553,15 +3507,17 @@ fn render_users(f: &mut Frame<CrosstermBackend<io::Stdout>>, r: Rect, users: &Ar
     users_types.push((&users.staff, "-- Staff --"));
     users_types.push((&users.members, "-- Members --"));
     users_types.push((&users.guests, "-- Guests --"));
-    for (users, label) in users_types.into_iter() {
-        users_list.push(ListItem::new(Span::raw(label)));
-        for (tui_color, username) in users.iter() {
+
+    for (user_group, label) in users_types.iter_mut() {
+        users_list.push(ListItem::new(Span::raw(*label)));
+        for (tui_color, username) in user_group.iter() {
             let span = Span::styled(username, Style::default().fg(*tui_color));
             users_list.push(ListItem::new(span));
         }
     }
-    let users = List::new(users_list).block(Block::default().borders(Borders::ALL).title("Users"));
-    f.render_widget(users, r);
+
+    let users_widget = List::new(users_list).block(Block::default().borders(Borders::ALL).title("Users"));
+    f.render_widget(users_widget, r);
 }
 
 fn random_string(n: usize) -> String {
