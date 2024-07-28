@@ -1,11 +1,13 @@
 use crate::{
-    trim_newline, CAPTCHA_FAILED_SOLVE_ERR, CAPTCHA_USED_ERR, CAPTCHA_WG_ERR, KICKED_ERR, LANG,
+    trim_newline, CAPTCHA_USED_ERR, CAPTCHA_WG_ERR, KICKED_ERR, LANG,
     NICKNAME_ERR, REG_ERR, SERVER_DOWN_500_ERR, SERVER_DOWN_ERR, SESSION_RGX, UNKNOWN_ERR,
 };
 use base64::engine::general_purpose;
 use base64::Engine;
 use http::StatusCode;
 use regex::Regex;
+use image::DynamicImage;
+
 use reqwest::blocking::Client;
 use select::document::Document;
 use select::predicate::{And, Attr, Name};
@@ -21,7 +23,6 @@ pub mod captcha;
 pub enum LoginErr {
     ServerDownErr,
     ServerDown500Err,
-    CaptchaFailedSolveErr, // When auto-solver failed to solve the lechatphp built-in captcha
     CaptchaUsedErr,
     CaptchaWgErr,
     RegErr,
@@ -42,7 +43,6 @@ impl Display for LoginErr {
         let s = match self {
             LoginErr::ServerDownErr => SERVER_DOWN_ERR.to_owned(),
             LoginErr::ServerDown500Err => SERVER_DOWN_500_ERR.to_owned(),
-            LoginErr::CaptchaFailedSolveErr => CAPTCHA_FAILED_SOLVE_ERR.to_owned(),
             LoginErr::CaptchaUsedErr => CAPTCHA_USED_ERR.to_owned(),
             LoginErr::CaptchaWgErr => CAPTCHA_WG_ERR.to_owned(),
             LoginErr::RegErr => REG_ERR.to_owned(),
@@ -65,7 +65,6 @@ pub fn login(
     password: &str,
     color: &str,
     manual_captcha: bool,
-    sxiv: bool,
 ) -> Result<String, LoginErr> {
     // Get login page
     let login_url = format!("{}/{}", &base_url, &page_php);
@@ -94,10 +93,6 @@ pub fn login(
 
         let mut captcha_input = String::new();
         if manual_captcha {
-            // Otherwise, save the captcha on disk and prompt user for answer
-            // println!("Captcha image source: {}", captcha_img);
-            // let img_decoded = general_purpose::STANDARD.decode(captcha_img.strip_prefix("data:image/gif;base64,").unwrap()).unwrap();
-            //
             // Attempt to strip the appropriate prefix based on the MIME type
             let base64_str =
                 if let Some(base64) = captcha_img.strip_prefix("data:image/png;base64,") {
@@ -111,7 +106,6 @@ pub fn login(
             // Decode the base64 string into binary image data
             let img_decoded = general_purpose::STANDARD.decode(base64_str).unwrap();
 
-            //
             let img = image::load_from_memory(&img_decoded).unwrap();
             let img_buf = image::imageops::resize(
                 &img,
@@ -122,36 +116,89 @@ pub fn login(
             // Save captcha as file on disk
             img_buf.save("captcha.gif").unwrap();
 
-            if sxiv {
-                let mut sxiv_process = Command::new("sxiv")
-                    .arg("captcha.gif")
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .expect("Failed to open image with sxiv");
+            // Pilihan untuk menyelesaikan captcha
+            println!("choice your methode captcha view:");
+            println!("1. Terminal (ASCII)");
+            println!("2. Sxiv");
+            print!("choice option: ");
+            io::stdout().flush().unwrap();
+            let mut choice = String::new();
+            io::stdin().read_line(&mut choice).unwrap();
+            let choice = choice.trim();
 
-                // Prompt the user to enter the CAPTCHA
-                print!("Please enter the CAPTCHA: ");
-                io::stdout().flush().unwrap();
-                io::stdin().read_line(&mut captcha_input).unwrap();
-                trim_newline(&mut captcha_input);
+            match choice {
+                "1" => {
+                    // Menampilkan captcha di terminal secara langsung (ASCII)
+                    println!("Captcha:");
+                    let img_ascii = image_to_ascii(&img, 80, 40);
+                    println!("{}", img_ascii);
+                    
+                    // Prompt untuk memasukkan captcha
+                    print!("Masukkan captcha: ");
+                    io::stdout().flush().unwrap();
+                    io::stdin().read_line(&mut captcha_input).unwrap();
+                    trim_newline(&mut captcha_input);
+                },
+                "2" => {
+                    let mut sxiv_process = Command::new("sxiv")
+                        .arg("captcha.gif")
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .expect("Failed to open image with sxiv");
 
-                // Close the sxiv window
-                sxiv_process.kill().expect("Failed to close sxiv");
+                    // Prompt the user to enter the CAPTCHA
+                    print!("Please enter the CAPTCHA: ");
+                    io::stdout().flush().unwrap();
+                    io::stdin().read_line(&mut captcha_input).unwrap();
+                    trim_newline(&mut captcha_input);
 
-                println!("Captcha input: {}", captcha_input);
-            } else {
-                termage::display_image("captcha.gif", img.width(), img.height());
+                    // Close the sxiv window
+                    sxiv_process.kill().expect("Failed to close sxiv");
 
-                // Enter captcha
-                print!("captcha: ");
-                io::stdout().flush().unwrap();
-                io::stdin().read_line(&mut captcha_input).unwrap();
-                trim_newline(&mut captcha_input);
+                    println!("Captcha input: {}", captcha_input);
+                },
+                _ => {
+                    println!("Pilihan tidak valid. Menggunakan metode terminal (ASCII).");
+                    // Menampilkan captcha di terminal secara langsung
+                    println!("Captcha:");
+                    let img_ascii = image_to_ascii(&img, 80, 40);
+                    println!("{}", img_ascii);
+                    
+                    print!("Masukkan captcha: ");
+                    io::stdout().flush().unwrap();
+                    io::stdin().read_line(&mut captcha_input).unwrap();
+                    trim_newline(&mut captcha_input);
+                }
             }
+
+            // Menyimpan captcha yang baru dimasukkan
         } else {
-            captcha_input =
-                captcha::solve_b64(captcha_img).ok_or(LoginErr::CaptchaFailedSolveErr)?;
+            // Menyelesaikan captcha secara otomatis
+            captcha_input = match captcha::solve_b64(captcha_img) {
+                Some(solved_captcha) => solved_captcha,
+                None => {
+                    // Jika gagal menyelesaikan captcha secara otomatis, coba gunakan captcha sebelumnya
+                    if let Ok(previous_captcha) = fs::read_to_string("previous_captcha.txt") {
+                        println!("Menggunakan captcha sebelumnya: {}", previous_captcha.trim());
+                        previous_captcha.trim().to_string()
+                    } else {
+                        // Jika tidak ada captcha sebelumnya, gunakan metode manual
+                        println!("Gagal menyelesaikan captcha secara otomatis dan tidak ada captcha sebelumnya. Menggunakan metode manual.");
+                        let img = image::load_from_memory(&general_purpose::STANDARD.decode(captcha_img.split(',').last().unwrap()).unwrap()).unwrap();
+                        println!("Captcha:");
+                        let img_ascii = image_to_ascii(&img, 80, 40);
+                        println!("{}", img_ascii);
+                        
+                        print!("Masukkan captcha: ");
+                        io::stdout().flush().unwrap();
+                        let mut manual_input = String::new();
+                        io::stdin().read_line(&mut manual_input).unwrap();
+                        trim_newline(&mut manual_input);
+                        manual_input
+                    }
+                }
+            };
         }
 
         params.extend(vec![
@@ -242,6 +289,29 @@ pub fn login(
     let session = session_captures.get(1).unwrap().as_str();
     Ok(session.to_owned())
 }
+
+// Fungsi untuk mengubah gambar menjadi ASCII art
+fn image_to_ascii(img: &DynamicImage, width: u32, height: u32) -> String {
+    let img = img.resize_exact(width, height, image::imageops::FilterType::Nearest);
+    let img = img.to_luma8();
+    let mut result = String::new();
+    for y in 0..height {
+        for x in 0..width {
+            let pixel = img.get_pixel(x, y);
+            let intensity = pixel[0];
+            let ascii_char = match intensity {
+                0..=63 => '#',
+                64..=127 => '+',
+                128..=191 => '-',
+                192..=255 => '.',
+            };
+            result.push(ascii_char);
+        }
+        result.push('\n');
+    }
+    result
+}
+
 
 pub fn logout(
     client: &Client,

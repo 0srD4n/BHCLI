@@ -12,6 +12,7 @@ bresenham = "0.1.1"
 chrono = "0.4.19"
 clap = { version = "4.1.14", features = ["derive", "env"] }
 clipboard = "0.5.0"
+viuer = "0.6"  # Ganti dengan versi terbaru jika perlu
 colors-transform = "0.2.4"
 confy = "0.5.1"
 crossbeam = "0.8.1"

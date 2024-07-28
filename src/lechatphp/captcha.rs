@@ -310,4 +310,4 @@ fn count_red_px(img: &DynamicImage) -> usize {
     img.pixels()
         .filter(|(_, _, c)| is_red(*c))
         .count()
-}
+}   

@@ -71,7 +71,6 @@ const KICKED_ERR: &str = "You have been kicked";
 const REG_ERR: &str = "This nickname is a registered member";
 const NICKNAME_ERR: &str = "Invalid nickname";
 const CAPTCHA_WG_ERR: &str = "Wrong Captcha";
-const CAPTCHA_FAILED_SOLVE_ERR: &str = "Failed solve captcha";
 const CAPTCHA_USED_ERR: &str = "Captcha already used or timed out";
 const UNKNOWN_ERR: &str = "Unknown error";
 const DNMX_URL: &str = "http://hxuzjtocnzvv5g2rtg2bhwkcbupmk7rclb6lly3fo4tvqkk5oyrv3nid.onion";
@@ -212,7 +211,6 @@ struct LeChatPHPClient {
     config: LeChatPHPConfig,
     last_key_event: Option<KeyCode>,
     manual_captcha: bool,
-    sxiv: bool,
     refresh_rate: u64,
     max_login_retry: isize,
 
@@ -243,11 +241,6 @@ impl LeChatPHPClient {
                         log::error!("{}", e);
                         println!("Login error: {}", e); // Print error message
                         break;
-                    }
-                    LoginErr::CaptchaFailedSolveErr => {
-                        log::error!("{}", e);
-                        println!("Captcha failed to solve: {}", e); // Print error message
-                        continue;
                     }
                     LoginErr::CaptchaWgErr | LoginErr::CaptchaUsedErr => {}
                     LoginErr::ServerDownErr | LoginErr::ServerDown500Err => {
@@ -299,8 +292,6 @@ impl LeChatPHPClient {
         last_post_rx: crossbeam_channel::Receiver<()>,
     ) -> thread::JoinHandle<()> {
         let tx = self.tx.clone();
-        // let msg_actived_bot = format!(">>> [color=#ffffff]Dantca patch update on system >> ..... configuration successful.. not error report > - < actived[/color] <<< |3 min removed |");
-        // tx.send(PostType::Post(msg_actived_bot.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
         let send_to = self.config.keepalive_send_to.clone();
         thread::spawn(move || loop {
             let keep_msg = || {
@@ -528,7 +519,6 @@ impl LeChatPHPClient {
             &self.base_client.password,
             &self.guest_color,
             self.manual_captcha,
-            self.sxiv,
         )?);
         Ok(())
     }
@@ -808,7 +798,8 @@ impl LeChatPHPClient {
                 code: KeyCode::Char('T'),
                 modifiers: KeyModifiers::SHIFT,
                 ..
-            } => self.handle_normal_mode_key_event_page_up(app),
+            } 
+            => self.handle_normal_mode_key_event_page_up(app),
             KeyEvent {
                 code: KeyCode::Char('d'),
                 modifiers: KeyModifiers::CONTROL,
@@ -848,6 +839,17 @@ impl LeChatPHPClient {
     ) -> Result<(), ExitSignal> {
         app.input_mode = InputMode::Editing;
         match key_event {
+            KeyEvent {
+                code: KeyCode::Char('R'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_deactived_dantca(app),
+            KeyEvent {
+                code: KeyCode::Char('r'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_actived_dantca(app), 
+            // damtca actived
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
@@ -931,6 +933,27 @@ impl LeChatPHPClient {
             _ => {}
         }
         Ok(())
+    }
+    fn handle_actived_dantca(&mut self, _app: &mut App) {
+        unsafe {
+            // Aktifkan bot
+            BOT_ACTIVE = true;
+            
+            // Kirim pesan bahwa bot telah diaktifkan
+            let msg_actived_bot = format!(">>> [color=#ffffff]Dantca patch update on system >> ..... configuration successful.. not error report > - < actived with panel control[/color] <<< |3 min removed |");
+            if let Err(e) = self.tx.send(PostType::Post(msg_actived_bot.to_owned(), Some(SEND_TO_ALL.to_owned()))) {
+                eprintln!("Gagal mengirim pesan: {:?}", e);
+            }
+        }
+    }
+    fn handle_deactived_dantca(&mut self, _app: &mut App){
+        unsafe {
+            BOT_ACTIVE = false;
+            let msg_actived_bot = format!(">>> [color=#ffffff]Dantca Deactived with panel contro[/color] <<< |3 min removed |");
+            if let Err(e) = self.tx.send(PostType::Post(msg_actived_bot.to_owned(), Some(SEND_TO_ALL.to_owned()))) {
+                eprintln!("Gagal mengirim pesan: {:?}", e);
+            }
+        }
     }
 
     fn handle_long_message_mode_key_event_esc(&mut self, app: &mut App) {
@@ -1402,19 +1425,6 @@ impl LeChatPHPClient {
             };
             self.post_msg(PostType::Upload(file_path, send_to, msg))
                 .unwrap();
-        } else if input.starts_with("!warn") {
-            // Strange
-            let msg: String = input
-                .find('@')
-                .map(|index| input[index..].to_string())
-                .unwrap_or_else(String::new);
-
-            let end_msg = format!(
-                "This is your warning - {}, will be kicked next  !rules",
-                msg
-            );
-            // log::error!("The Strange end_msg is :{}", end_msg);
-            self.post_msg(PostType::Post(end_msg, None)).unwrap();
         } else {
             if input.starts_with("/") && !input.starts_with("/me ") {
                 app.input_idx = input.len();
@@ -2496,7 +2506,6 @@ fn new_default_le_chat_php_client(params: Params) -> LeChatPHPClient {
         last_key_event: None,
         client: params.client,
         manual_captcha: params.manual_captcha,
-        sxiv: params.sxiv,
         refresh_rate: params.refresh_rate,
         config: LeChatPHPConfig::new_black_hat_chat_config(),
         is_muted: Arc::new(Mutex::new(false)),
@@ -2526,7 +2535,6 @@ struct Params {
     guest_color: String,
     client: Client,
     manual_captcha: bool,
-    sxiv: bool,
     refresh_rate: u64,
     max_login_retry: isize,
     keepalive_send_to: Option<String>,
@@ -2809,7 +2817,6 @@ fn main() -> anyhow::Result<()> {
         guest_color,
         client: client.clone(),
         manual_captcha: opts.manual_captcha,
-        sxiv: opts.sxiv,
         refresh_rate: opts.refresh_rate,
         max_login_retry: opts.max_login_retry,
         keepalive_send_to: opts.keepalive_send_to,
@@ -3355,6 +3362,20 @@ fn render_help_txt(
         let style = Style::default().fg(fg);
         msg.extend(vec![Span::raw(" | "), Span::styled("H", style)]);
     }
+
+    // Menampilkan status BOT_ACTIVE
+    unsafe {
+        if BOT_ACTIVE {
+            let fg = tuiColor::Gray;
+            let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
+            msg.extend(vec![Span::raw(" | "), Span::styled("Dantca Actived", style)]);
+        } else {
+            let fg = tuiColor::Red;
+            let style = Style::default().fg(fg);
+            msg.extend(vec![Span::raw(" | "), Span::styled("Dantca Deactived", style)]);
+        }
+    }
+
     let mut text = Text::from(Spans::from(msg));
     text.patch_style(style);
     let help_message = Paragraph::new(text);
