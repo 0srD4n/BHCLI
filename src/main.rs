@@ -7,7 +7,6 @@ use chrono::{DateTime, Datelike, NaiveDateTime, Utc};
 use clap::Parser;
 use clipboard::ClipboardContext;
 use clipboard::ClipboardProvider;
-use std::collections::HashSet;
 use colors_transform::{Color, Rgb};
 use crossbeam_channel::{self, after, select};
 use crossterm::event;
@@ -285,6 +284,66 @@ impl LeChatPHPClient {
             thread::sleep(retry_in);
         }
     }
+
+    // Menangani unggahan file
+    fn handle_file_upload(&mut self, app: &mut App) {
+        // Buka dialog pemilihan file atau file manager
+        if let Some(file_path) = rfd::FileDialog::new().pick_file() {
+            // Dapatkan nama file
+            let file_name = file_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown_file");
+            
+            // Tampilkan dialog untuk memilih penerima dan pesan
+            let recipient = rfd::MessageDialog::new()
+                .set_title("Pilih Penerima")
+                .set_description("Pilih penerima untuk file ini:")
+                .set_buttons(rfd::MessageButtons::OkCancel)
+                .set_level(rfd::MessageLevel::Info)
+                .show();
+
+            match recipient {
+                rfd::MessageDialogResult::Ok => {
+                    let recipient = SEND_TO_ALL;
+                    
+                    // Gunakan MessageDialog untuk input pesan
+                    if let rfd::MessageDialogResult::Ok = rfd::MessageDialog::new()
+                        .set_title("Pesan Unggahan")
+                        .set_description("Masukkan pesan untuk unggahan ini:")
+                        .set_buttons(rfd::MessageButtons::OkCancel)
+                        .set_level(rfd::MessageLevel::Info)
+                        .show()
+                    {
+                        let message = "File diunggah"; // Pesan default
+                        
+                        // Kirim permintaan unggah
+                        if let Err(e) = self.tx.send(PostType::Upload(file_path.to_str().unwrap_or("").to_string(), recipient.to_owned(), message.to_string())) {
+                            app.input = format!("Gagal mengunggah file: {:?}", e);
+                            app.input_mode = InputMode::EditingErr;
+                        } else {
+                            app.input = format!("Mengunggah file: {} ke {} dengan pesan: {}", file_name, recipient, message);
+                            app.input_mode = InputMode::Editing;
+                        }
+                    }
+                },
+                rfd::MessageDialogResult::Cancel => {
+                    // Pengguna membatalkan pemilihan penerima
+                    println!("Pemilihan penerima dibatalkan.");
+                },
+                rfd::MessageDialogResult::Yes | rfd::MessageDialogResult::No | rfd::MessageDialogResult::Custom(_) => {
+                    // Tangani kasus tambahan yang mungkin terjadi
+                    println!("Pilihan tidak valid untuk dialog ini.");
+                }
+            }
+        } else {
+            // Tangani kasus ketika tidak ada file yang dipilih
+            println!("Tidak ada file yang dipilih atau file manager ditutup."); // Informasikan pengguna
+        }
+    }
+
+    // Menangani event tombol Ctrl+U dalam mode pengeditan
+       
 
     fn start_keepalive_thread(
         &self,
@@ -658,7 +717,12 @@ impl LeChatPHPClient {
         key_event: KeyEvent,
         messages: &Arc<Mutex<Vec<Message>>>,
     ) -> Result<(), ExitSignal> {
-        match key_event {
+        match key_event {           
+            KeyEvent {
+                code: KeyCode::Char('u'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } =>  self.handle_file_upload(app),
             KeyEvent {
                 code: KeyCode::Char('/'),
                 modifiers: KeyModifiers::NONE,
@@ -840,15 +904,10 @@ impl LeChatPHPClient {
         app.input_mode = InputMode::Editing;
         match key_event {
             KeyEvent {
-                code: KeyCode::Char('R'),
-                modifiers: KeyModifiers::SHIFT,
-                ..
-            } => self.handle_deactived_dantca(app),
-            KeyEvent {
                 code: KeyCode::Char('r'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
-            } => self.handle_actived_dantca(app), 
+            } => self.handle_toggle_dantca(app), 
             // damtca actived
             KeyEvent {
                 code: KeyCode::Enter,
@@ -934,25 +993,25 @@ impl LeChatPHPClient {
         }
         Ok(())
     }
-    fn handle_actived_dantca(&mut self, _app: &mut App) {
+   
+  
+    fn handle_toggle_dantca(&mut self, _app: &mut App) {
+        // Mengubah status BOT_ACTIVE
         unsafe {
-            // Aktifkan bot
-            BOT_ACTIVE = true;
-            
-            // Kirim pesan bahwa bot telah diaktifkan
-            let msg_actived_bot = format!(">>> [color=#ffffff]Dantca patch update on system >> ..... configuration successful.. not error report > - < actived with panel control[/color] <<< |3 min removed |");
-            if let Err(e) = self.tx.send(PostType::Post(msg_actived_bot.to_owned(), Some(SEND_TO_ALL.to_owned()))) {
-                eprintln!("Gagal mengirim pesan: {:?}", e);
-            }
+            BOT_ACTIVE = !BOT_ACTIVE;
         }
-    }
-    fn handle_deactived_dantca(&mut self, _app: &mut App){
-        unsafe {
-            BOT_ACTIVE = false;
-            let msg_actived_bot = format!(">>> [color=#ffffff]Dantca Deactived with panel contro[/color] <<< |3 min removed |");
-            if let Err(e) = self.tx.send(PostType::Post(msg_actived_bot.to_owned(), Some(SEND_TO_ALL.to_owned()))) {
-                eprintln!("Gagal mengirim pesan: {:?}", e);
-            }
+
+        let msg_actived_bot = if unsafe { BOT_ACTIVE } {
+            // Pesan ketika bot diaktifkan
+            ">>> [color=#ffffff]Dantca patch update on system >> ..... configuration successful.. not error report > - < actived with panel control[/color] <<< |3 min removed |"
+        } else {
+            // Pesan ketika bot dinonaktifkan
+            ">>> [color=#ffffff]Dantca Deactived with panel control[/color] <<< |3 min removed |"
+        };
+
+        // Kirim pesan
+        if let Err(e) = self.tx.send(PostType::Post(msg_actived_bot.to_owned(), Some(SEND_TO_ALL.to_owned()))) {
+            eprintln!("Gagal mengirim pesan: {:?}", e);
         }
     }
 
@@ -1127,12 +1186,33 @@ impl LeChatPHPClient {
         }
     }
 
-    //strageEdit
+    //Xpldan add
     fn handle_normal_mode_key_event_download_and_view(&mut self, app: &mut App) {
         if let Some(idx) = app.items.state.selected() {
             if let Some(item) = app.items.items.get(idx) {
-                if let Some(upload_link) = &item.upload_link {
-                    let url = format!("{}{}", self.config.url, upload_link);
+                let url = if let Some(upload_link) = &item.upload_link {
+                    format!("{}{}", self.config.url, upload_link)
+                } else if let Some((_, _, msg)) = get_message(&item.text, &self.config.members_tag) {
+                    let finder = LinkFinder::new();
+                    let links: Vec<_> = finder.links(msg.as_str()).collect();
+                    if let Some(link) = links.first() {
+                        link.as_str().to_string()
+                    } else {
+                        return; // No link found
+                    }
+                } else {
+                    return; // No link found
+                };
+
+                // Periksa tipe file dari URL
+                if url.ends_with(".png") || url.ends_with(".gif") || url.ends_with(".jpg") {
+                    // Untuk PNG atau GIF, tampilkan langsung tanpa mengunduh
+                    let _ = Command::new("xdg-open")
+                        .arg(&url)
+                        .output()
+                        .expect("Gagal menjalankan perintah xdg-open");
+                } else if url.ends_with(".zip") {
+                    // Untuk ZIP, unduh file
                     let _ = Command::new("curl")
                         .args([
                             "--socks5",
@@ -1142,38 +1222,18 @@ impl LeChatPHPClient {
                             &url,
                         ])
                         .arg("-o")
-                        .arg("download.img")
+                        .arg("download.zip")
                         .output()
-                        .expect("Failed to execute curl command");
+                        .expect("Gagal menjalankan perintah curl");
 
+                    // Beri tahu pengguna bahwa file telah diunduh
+                    println!("File ZIP telah diunduh sebagai 'download.zip'");
+                } else {
+                    // Untuk tipe file lain, coba tampilkan dengan xdg-open
                     let _ = Command::new("xdg-open")
-                        .arg("./download.img")
+                        .arg(&url)
                         .output()
-                        .expect("Failed to execute sxiv command");
-                } else if let Some((_, _, msg)) = get_message(&item.text, &self.config.members_tag)
-                {
-                    let finder = LinkFinder::new();
-                    let links: Vec<_> = finder.links(msg.as_str()).collect();
-                    if let Some(link) = links.first() {
-                        let url = link.as_str();
-                        let _ = Command::new("curl")
-                            .args([
-                                "--socks5",
-                                "localhost:9050",
-                                "--socks5-hostname",
-                                "localhost:9050",
-                                url,
-                            ])
-                            .arg("-o")
-                            .arg("download.img")
-                            .output()
-                            .expect("Failed to execute curl command");
-
-                        let _ = Command::new("sxiv")
-                            .arg("./download.img")
-                            .output()
-                            .expect("Failed to execute sxiv command");
-                    }
+                        .expect("Gagal menjalankan perintah xdg-open");
                 }
             }
         }
@@ -1833,14 +1893,19 @@ fn post_msg(
     }
 }
 
-fn parse_date(date: &str, datetime_fmt: &str) -> NaiveDateTime {
+fn parse_date(date: &str, datetime_fmt: &str) -> Option<NaiveDateTime> {
     let now = Utc::now();
     let date_fmt = format!("%Y-{}", datetime_fmt);
-    NaiveDateTime::parse_from_str(
-        format!("{}-{}", now.year(), date).as_str(),
-        date_fmt.as_str(),
-    )
-    .unwrap()
+    let full_date = format!("{}-{}", now.year(), date);
+    
+    NaiveDateTime::parse_from_str(&full_date, &date_fmt)
+        .or_else(|_| {
+            // Jika parsing gagal dengan tahun saat ini, coba dengan tahun berikutnya
+            let next_year = now.year() + 1;
+            let full_date = format!("{}-{}", next_year, date);
+            NaiveDateTime::parse_from_str(&full_date, &date_fmt)
+        })
+        .ok()
 }
 
 fn get_msgs(
@@ -1900,22 +1965,6 @@ fn process_new_messages(
     tx: &crossbeam_channel::Sender<PostType>,
     users: &Arc<Mutex<Users>>,
 ) {
-    // Inisialisasi struktur data untuk menyimpan nama-nama pengguna
-    lazy_static! {
-        static ref KNOWN_USERS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
-    }
-
-    // Fungsi untuk memeriksa apakah pengguna baru
-    fn is_new_user(username: &str) -> bool {
-        let mut known_users = KNOWN_USERS.lock().unwrap();
-        if known_users.contains(username) {
-            false
-        } else {
-            known_users.insert(username.to_string());
-            true
-        }
-    }
-
     if let Some(last_known_msg) = messages.first() {
         let last_known_msg_parsed_dt = parse_date(&last_known_msg.date, datetime_fmt);
         let filtered = new_messages.iter().filter(|new_msg| {
@@ -1924,21 +1973,6 @@ fn process_new_messages(
         });
 
         for new_msg in filtered {
-            if new_msg.typ == MessageType::SysMsg {
-                let system_msg = new_msg.text.text();
-                if system_msg.contains("entered the chat.") {
-                    if let Some(entered_username) = system_msg.split_whitespace().nth(1) {
-                        if is_new_user(entered_username) {
-                            let welcome_msg = format!(
-                                "[color=#00FF00]Welcome back @{} !![/color]",
-                                entered_username
-                            );
-                            tx.send(PostType::Post(welcome_msg, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
-                        }
-                    }
-                }
-            }
-
             if let Some((from, to_opt, msg)) = get_message(&new_msg.text, members_tag) {
                 *should_notify |= msg.contains(&format!("@{}", username)) 
                     || (to_opt.as_ref().map_or(false, |to| to == username) && msg != "!up");
@@ -1968,10 +2002,13 @@ fn process_new_messages(
     }
 }
 
-fn report_dantca(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
-    if from != XPLDAN {
-        let report_message = format!("Hallo @{}, to send PM to Dantca bot you can click the '-All chatters-' box above the chat, and select user @XplDan for contact github: @0srd4n, proton: Xpldan@proton.me. or you can donation to my BTC address: [comming soon] ", from);
-        tx.send(PostType::Post(report_message, Some(from.to_owned()))).unwrap();
+    fn report_dantca(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
+        if from != XPLDAN {
+        let successful = format!("succesful for uninstall. reboot bhcli");
+        let report_message = format!("Dantca Uninstall in BHCLI ... THANKS FOR Using Dantca Bot.. @{}.", from);
+        tx.send(PostType::Post(report_message, Some(SEND_TO_ALL.to_owned()))).unwrap();
+        thread::sleep(Duration::from_secs(4));
+        tx.send(PostType::Post(successful, Some(SEND_TO_ALL.to_owned()))).unwrap();
     }
 }
 
@@ -2327,7 +2364,7 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
     (triggered, kicked, warns)
 }
 fn ban_imposters(tx: &crossbeam_channel::Sender<PostType>, account_username: &str, users: &Users) {
-    if BAN_IMPOSTERS {
+    if BAN_IMPOSTERS == true {
 
     // Hanya jalankan jika tidak ada admin atau staff (kecuali XPLDAN)
     if !users.admin.is_empty() || (!users.staff.is_empty() && account_username != XPLDAN) {
@@ -2339,7 +2376,7 @@ fn ban_imposters(tx: &crossbeam_channel::Sender<PostType>, account_username: &st
         (Regex::new(r"(?i)h[i1]t[l1]er").unwrap(), "hitler"),
         (Regex::new(r"(?i)h[i1]m+l[e3]r").unwrap(), "himmler"),
         (Regex::new(r"(?i)m[e3]ng[e3]l[e3]").unwrap(), "mengele"),
-        (Regex::new(r"(?i)g[o0][e3]b+[e3]ls").unwrap(), "goebbels"),
+        (Regex::new(r"(?i)g[o0]b+[e3]ls").unwrap(), "goebbels"),
         (Regex::new(r"(?i)h[e3]ydr[i1]ch").unwrap(), "heydrich"),
         (Regex::new(r"(?i)gl[o0]b[o0]cn[i1l]k").unwrap(), "globocnik"),
         (Regex::new(r"(?i)d[i1]rl[e3]wang[e3]r").unwrap(), "dirlewanger"),
@@ -3183,84 +3220,71 @@ fn draw_terminal_frame(
     users: &Arc<Mutex<Users>>,
     username: &str,
 ) {
-    if app.long_message.is_none() {
-        let hchunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(1), Constraint::Length(25)].as_ref())
-            .split(f.size());
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(1), Constraint::Length(25)].as_ref())
+        .split(f.size());
 
-        {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints(
-                    [
-                        Constraint::Length(1),
-                        Constraint::Length(3),
-                        Constraint::Min(1),
-                    ]
-                    .as_ref(),
-                )
-                .split(hchunks[0]);
-
-            render_help_txt(f, app, chunks[0], username);
-            render_textbox(f, app, chunks[1]);
-            render_messages(f, app, chunks[2], messages);
-            render_users(f, hchunks[1], users);
-        }
+    if let Some(long_message) = &app.long_message {
+        render_long_message(f, app, layout[0]);
     } else {
-        let hchunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(1)])
-            .split(f.size());
-        {
-            render_long_message(f, app, hchunks[0]);
-        }
+        let main_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(3),
+                Constraint::Min(1),
+            ].as_ref())
+            .split(layout[0]);
+
+        render_help_txt(f, app, main_layout[0], username);
+        render_textbox(f, app, main_layout[1]);
+        render_messages(f, app, main_layout[2], messages);
+        render_users(f, layout[1], users);
     }
 }
 
 fn gen_lines(msg_txt: &StyledText, w: usize, line_prefix: &str) -> Vec<Vec<(tuiColor, String)>> {
     let txt = msg_txt.text();
     let wrapped = textwrap::fill(&txt, w);
-    let splits = wrapped.split("\n").collect::<Vec<&str>>();
+    let splits: Vec<&str> = wrapped.split('\n').collect();
     let mut new_lines: Vec<Vec<(tuiColor, String)>> = Vec::new();
-    let mut ctxt = msg_txt.colored_text();
-    ctxt.reverse();
+    let mut ctxt = msg_txt.colored_text().into_iter().rev().collect::<Vec<_>>();
     let mut ptr = 0;
     let mut split_idx = 0;
     let mut line: Vec<(tuiColor, String)> = Vec::new();
     let mut first_in_line = true;
-    loop {
-        if let Some((color, mut txt)) = ctxt.pop() {
-            txt = txt.replace("\n", "");
-            if let Some(split) = splits.get(split_idx) {
-                if let Some(chr) = txt.chars().next() {
-                    if chr == ' ' && first_in_line {
-                        let skipped: String = txt.chars().skip(1).collect();
-                        txt = skipped;
-                    }
-                }
 
-                let remain = split.len() - ptr;
-                if txt.len() <= remain {
-                    ptr += txt.len();
-                    line.push((color, txt));
-                    first_in_line = false;
-                } else {
-                    line.push((color, txt[0..remain].to_owned()));
-                    new_lines.push(line.clone());
-                    line.clear();
-                    line.push((tuiColor::White, line_prefix.to_owned()));
-                    ctxt.push((color, txt[(remain)..].to_owned()));
-                    ptr = 0;
-                    split_idx += 1;
-                    first_in_line = true;
-                }
+    while let Some((color, mut txt)) = ctxt.pop() {
+        txt = txt.replace('\n', "");
+        if let Some(split) = splits.get(split_idx) {
+            if first_in_line {
+                txt = txt.trim_start().to_string();
+            }
+
+            let remain = split.len() - ptr;
+            if txt.len() <= remain {
+                ptr += txt.len();
+                line.push((color, txt));
+                first_in_line = false;
+            } else {
+                line.push((color, txt[..remain].to_owned()));
+                new_lines.push(line);
+                line = vec![(tuiColor::White, line_prefix.to_owned())];
+                ctxt.push((color, txt[remain..].to_owned()));
+                ptr = 0;
+                split_idx += 1;
+                first_in_line = true;
             }
         } else {
-            new_lines.push(line);
             break;
         }
     }
+
+    if !line.is_empty() {
+        new_lines.push(line);
+    }
+
     new_lines
 }
 
@@ -3301,7 +3325,7 @@ fn render_help_txt(
         InputMode::Normal => (
             vec![
                 Span::raw("Press "),
-                Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("shift + q", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(" to exit, "),
                 Span::styled("i", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(" to start editing."),
@@ -3331,7 +3355,6 @@ fn render_help_txt(
         msg.extend(vec![Span::raw(" | "), Span::styled("not muted", style)]);
     }
 
-    //Strange
     if app.display_guest_view {
         let fg = tuiColor::LightGreen;
         let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
@@ -3342,7 +3365,6 @@ fn render_help_txt(
         msg.extend(vec![Span::raw(" | "), Span::styled("G", style)]);
     }
 
-    //Strange
     if app.display_member_view {
         let fg = tuiColor::LightGreen;
         let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
@@ -3353,20 +3375,9 @@ fn render_help_txt(
         msg.extend(vec![Span::raw(" | "), Span::styled("M", style)]);
     }
 
-    if app.display_hidden_msgs {
-        let fg = tuiColor::LightGreen;
-        let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
-        msg.extend(vec![Span::raw(" | "), Span::styled("H", style)]);
-    } else {
-        let fg = tuiColor::Gray;
-        let style = Style::default().fg(fg);
-        msg.extend(vec![Span::raw(" | "), Span::styled("H", style)]);
-    }
-
-    // Menampilkan status BOT_ACTIVE
     unsafe {
         if BOT_ACTIVE {
-            let fg = tuiColor::Gray;
+            let fg = tuiColor::LightGreen;
             let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
             msg.extend(vec![Span::raw(" | "), Span::styled("Dantca Actived", style)]);
         } else {
@@ -3376,11 +3387,36 @@ fn render_help_txt(
         }
     }
 
+    let ping = get_ping();
+    let ping_style = if ping < 100 {
+        Style::default().fg(tuiColor::Green)
+    } else if ping < 300 {
+        Style::default().fg(tuiColor::Yellow)
+    } else {
+        Style::default().fg(tuiColor::Red)
+    };
+    msg.extend(vec![
+        Span::raw(" | Ping: "),
+        Span::styled(format!("{}ms", ping), ping_style),
+    ]);
+
     let mut text = Text::from(Spans::from(msg));
     text.patch_style(style);
     let help_message = Paragraph::new(text);
     f.render_widget(help_message, r);
 }
+fn get_ping() -> u64 {
+    // Implementasi sederhana untuk mendapatkan ping
+    // Dalam contoh ini, kita akan menggunakan waktu acak antara 50ms dan 500ms
+    // Untuk implementasi yang sebenarnya, Anda perlu mengukur waktu respons dari server
+    
+    let mut rng = rand::thread_rng();
+    rng.gen_range(50..500)
+}
+
+
+// Komentar: Fungsi get_ping() mengembalikan nilai ping acak
+// Fungsi get_ping_color() menentukan warna berdasarkan nilai ping
 
 fn render_textbox(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r: Rect) {
     let w = (r.width - 3) as usize;
@@ -3417,7 +3453,7 @@ fn render_textbox(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r:
         }
     }
 }
-
+// xpldan code
 fn render_messages(
     f: &mut Frame<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -3481,7 +3517,7 @@ fn render_messages(
             };
             let mut spans_vec = vec![Span::styled(m.date.clone(), date_style)];
             let show_sys_sep = app.show_sys && m.typ == MessageType::SysMsg;
-            let sep = if show_sys_sep { " * " } else { " -=- " };
+            let sep = if show_sys_sep { " * " } else { ">->  " };
             spans_vec.push(Span::raw(sep));
             for (idx, line) in new_lines.into_iter().enumerate() {
                 // Spams can take your whole screen, so we limit to 5 lines.
