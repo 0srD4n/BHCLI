@@ -287,63 +287,73 @@ impl LeChatPHPClient {
 
     // Menangani unggahan file
     fn handle_file_upload(&mut self, app: &mut App) {
-        // Buka dialog pemilihan file atau file manager
+        // Gunakan dialog native untuk memilih file
         if let Some(file_path) = rfd::FileDialog::new().pick_file() {
-            // Dapatkan nama file
-            let file_name = file_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown_file");
-            
-            // Tampilkan dialog untuk memilih penerima dan pesan
-            let recipient = rfd::MessageDialog::new()
-                .set_title("Pilih Penerima")
-                .set_description("Pilih penerima untuk file ini:")
-                .set_buttons(rfd::MessageButtons::OkCancel)
-                .set_level(rfd::MessageLevel::Info)
-                .show();
+            // Buka terminal baru untuk input menggunakan xterm
+            let output = std::process::Command::new("xterm")
+                .arg("-e")
+                .arg("bash")
+                .arg("-c")
+                .arg(format!(
+                    r#"
+                    echo "File dipilih: {}";
+                    echo "Pilih tujuan pengiriman:";
+                    echo "1. Send to All";
+                    echo "2. Send to Members";
+                    echo "3. Send to Staffs";
+                    echo "4. Send to Admins";
+                    read -p "Masukkan pilihan (1/2/3/4): " choice;
+                    case $choice in
+                        1) send_to="all" ;;
+                        2) send_to="members" ;;
+                        3) send_to="staffs" ;;
+                        4) send_to="admins" ;;
+                        *) send_to="all" ;;
+                    esac
+                    echo "Masukkan pesan:";
+                    read msg;
+                    echo "$send_to|$msg" > /tmp/upload_info
+                    "#,
+                    file_path.display()
+                ))
+                .output();
 
-            match recipient {
-                rfd::MessageDialogResult::Ok => {
-                    let recipient = SEND_TO_ALL;
-                    
-                    // Gunakan MessageDialog untuk input pesan
-                    if let rfd::MessageDialogResult::Ok = rfd::MessageDialog::new()
-                        .set_title("Pesan Unggahan")
-                        .set_description("Masukkan pesan untuk unggahan ini:")
-                        .set_buttons(rfd::MessageButtons::OkCancel)
-                        .set_level(rfd::MessageLevel::Info)
-                        .show()
-                    {
-                        let message = "File diunggah"; // Pesan default
-                        
-                        // Kirim permintaan unggah
-                        if let Err(e) = self.tx.send(PostType::Upload(file_path.to_str().unwrap_or("").to_string(), recipient.to_owned(), message.to_string())) {
-                            app.input = format!("Gagal mengunggah file: {:?}", e);
-                            app.input_mode = InputMode::EditingErr;
-                        } else {
-                            app.input = format!("Mengunggah file: {} ke {} dengan pesan: {}", file_name, recipient, message);
-                            app.input_mode = InputMode::Editing;
-                        }
-                    }
-                },
-                rfd::MessageDialogResult::Cancel => {
-                    // Pengguna membatalkan pemilihan penerima
-                    println!("Pemilihan penerima dibatalkan.");
-                },
-                rfd::MessageDialogResult::Yes | rfd::MessageDialogResult::No | rfd::MessageDialogResult::Custom(_) => {
-                    // Tangani kasus tambahan yang mungkin terjadi
-                    println!("Pilihan tidak valid untuk dialog ini.");
-                }
+            if let Err(e) = output {
+                log::error!("Gagal membuka xterm: {:?}", e);
+                println!("Error: Gagal membuka xterm untuk input.");
+                return;
             }
+
+            // Baca hasil input dari file temporary
+            let upload_info = std::fs::read_to_string("/tmp/upload_info").unwrap_or_default();
+            let mut parts = upload_info.trim().split('|');
+            let send_to = parts.next().unwrap_or("").to_string();
+            let msg = parts.next().unwrap_or("").to_string();
+
+            // Konversi send_to ke format yang sesuai
+            let send_to = match send_to.as_str() {
+                "members" => SEND_TO_MEMBERS,
+                "staffs" => SEND_TO_STAFFS,
+                "admins" => SEND_TO_ADMINS,
+                _ => SEND_TO_ALL,
+            }.to_owned();
+
+            // Kirim permintaan unggah
+            if let Err(e) = self.post_msg(PostType::Upload(file_path.to_str().unwrap().to_string(), send_to, msg)) {
+                log::error!("Gagal mengirim permintaan unggah: {:?}", e);
+                println!("Error: Gagal mengirim permintaan unggah: {:?}", e);
+            } else {
+                println!("Sukses: Permintaan unggah berhasil dikirim untuk file: {}", file_path.display());
+            }
+
+            // Hapus file temporary
+            let _ = std::fs::remove_file("/tmp/upload_info");
         } else {
-            // Tangani kasus ketika tidak ada file yang dipilih
-            println!("Tidak ada file yang dipilih atau file manager ditutup."); // Informasikan pengguna
+            println!("Error: Tidak ada file yang dipilih.");
         }
     }
 
     // Menangani event tombol Ctrl+U dalam mode pengeditan
-       
 
     fn start_keepalive_thread(
         &self,
