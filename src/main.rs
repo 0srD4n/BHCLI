@@ -61,7 +61,6 @@ static mut BOT_ACTIVE: bool = false;
 const SEND_TO_STAFFS: &str = "s %";
 const SEND_TO_ADMINS: &str = "s _";
 const SOUND1: &[u8] = include_bytes!("sound1.mp3");
-static BAN_IMPOSTERS: bool = true;
 const XPLDAN: &str = "XplDan";
 const DKF_URL: &str = "http://dkforestseeaaq2dqz2uflmlsybvnq2irzn4ygyvu53oazyorednviid.onion";
 const SERVER_DOWN_500_ERR: &str = "500 Internal Server Error, server down";
@@ -286,7 +285,7 @@ impl LeChatPHPClient {
     }
 
     // Menangani unggahan file
-    fn handle_file_upload(&mut self, app: &mut App) {
+    fn handle_file_upload(&mut self) {
         // Gunakan dialog native untuk memilih file
         if let Some(file_path) = rfd::FileDialog::new().pick_file() {
             // Buka terminal baru untuk input menggunakan xterm
@@ -735,7 +734,7 @@ impl LeChatPHPClient {
                 code: KeyCode::Char('u'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
-            } =>  self.handle_file_upload(app),
+            } =>  self.handle_file_upload(),
             KeyEvent {
                 code: KeyCode::Char('/'),
                 modifiers: KeyModifiers::NONE,
@@ -2386,57 +2385,63 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
     (triggered, kicked, warns)
 }
 fn ban_imposters(tx: &crossbeam_channel::Sender<PostType>, account_username: &str, users: &Users) {
-    if BAN_IMPOSTERS == true {
+    // Menggunakan unsafe block untuk mengakses BOT_ACTIVE
+    let bot_active = unsafe { BOT_ACTIVE };
 
-    // Hanya jalankan jika tidak ada admin atau staff (kecuali XPLDAN)
-    if !users.admin.is_empty() || (!users.staff.is_empty() && account_username != XPLDAN) {
-        return;
-    }
-
-    let banned_patterns = [
-        (Regex::new(r"(?i)n[o0]tr[1il][vy]").unwrap(), "n0tr1v"),
-        (Regex::new(r"(?i)h[i1]t[l1]er").unwrap(), "hitler"),
-        (Regex::new(r"(?i)h[i1]m+l[e3]r").unwrap(), "himmler"),
-        (Regex::new(r"(?i)m[e3]ng[e3]l[e3]").unwrap(), "mengele"),
-        (Regex::new(r"(?i)g[o0]b+[e3]ls").unwrap(), "goebbels"),
-        (Regex::new(r"(?i)h[e3]ydr[i1]ch").unwrap(), "heydrich"),
-        (Regex::new(r"(?i)gl[o0]b[o0]cn[i1l]k").unwrap(), "globocnik"),
-        (Regex::new(r"(?i)d[i1]rl[e3]wang[e3]r").unwrap(), "dirlewanger"),
-        (Regex::new(r"(?i)j[e3]ck[e3]ln").unwrap(), "jeckeln"),
-        (Regex::new(r"(?i)kram[e3]r").unwrap(), "kramer"),
-        (Regex::new(r"(?i)bl[o0]b[e3]l").unwrap(), "blobel"),
-        (Regex::new(r"(?i)stangl").unwrap(), "stangl"),
-        (Regex::new(r"(?i)\b(pedo|cp|danbyt|bigdick|bitch|kill|killer|dick|trolls|child\s*porn|hamas|pussy|cum|pedofile|fucked|lolita\s*slaves|fuck\s*all|fucking|bomb|fuckings)\b").unwrap(), "general blacklist"),
-    ];
-
-    let xpldan_patterns = Regex::new(r"(?i)\b(fuck|xpldan|nigg[iuaoe]|nig[iuao]|niqq|chink|wank|shit|cunt|bitch|booty|hooker|milf|rapist|balls|sex|cocaine|heroine|weed|drug|card|fisting|jerk|p3do|pedo|cplove|perv|gangbang|porn|dick|penis|puzzy|pussy|boceta|anal|cum|market|sell|fraud|DN37R34P3R|atomwaffen|altright)\b").unwrap();
-
-    for (_color, username) in &users.guests {
-        let lower_name = username.to_lowercase();
-
-        // Cek nama member
-        if users.members.iter().any(|(_, member)| lower_name.contains(&member.to_lowercase())) {
-            let msg = format!("Username members BHC '{}' is not allowed.", username);
-            tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
-            continue;
+    // Hanya jalankan fungsi jika bot aktif
+    if bot_active {
+        // Hanya jalankan jika tidak ada admin atau staff (kecuali XPLDAN)
+        if !users.admin.is_empty() || (!users.staff.is_empty() && account_username != XPLDAN) {
+            return;
         }
 
-        // Cek pola yang dilarang
-        for (pattern, name) in &banned_patterns {
-            if pattern.is_match(&lower_name) {
-                let msg = format!("Do not use names on the blacklist '{}' ({}).", lower_name, name);
+        let banned_patterns = [
+            (Regex::new(r"(?i)n[o0]tr[1il][vy]").unwrap(), "n0tr1v"),
+            (Regex::new(r"(?i)h[i1]t[l1]er").unwrap(), "hitler"),
+            (Regex::new(r"(?i)h[i1]m+l[e3]r").unwrap(), "himmler"),
+            (Regex::new(r"(?i)m[e3]ng[e3]l[e3]").unwrap(), "mengele"),
+            (Regex::new(r"(?i)g[o0]b+[e3]ls").unwrap(), "goebbels"),
+            (Regex::new(r"(?i)h[e3]ydr[i1]ch").unwrap(), "heydrich"),
+            (Regex::new(r"(?i)gl[o0]b[o0]cn[i1l]k").unwrap(), "globocnik"),
+            (Regex::new(r"(?i)d[i1]rl[e3]wang[e3]r").unwrap(), "dirlewanger"),
+            (Regex::new(r"(?i)j[e3]ck[e3]ln").unwrap(), "jeckeln"),
+            (Regex::new(r"(?i)kram[e3]r").unwrap(), "kramer"),
+            (Regex::new(r"(?i)bl[o0]b[e3]l").unwrap(), "blobel"),
+            (Regex::new(r"(?i)stangl").unwrap(), "stangl"),
+            (Regex::new(r"(?i)\b(pedo|cp|danbyt|bigdick|bitch|kill|killer|dick|trolls|child\s*porn|hamas|pussy|cum|pedofile|fucked|lolita\s*slaves|fuck\s*all|fucking|bomb|fuckings)\b").unwrap(), "general blacklist"),
+        ];
+
+        let xpldan_patterns = Regex::new(r"(?i)\b(fuck|xpldan|nigg[iuaoe]|nig[iuao]|niqq|chink|wank|shit|cunt|bitch|booty|hooker|milf|rapist|balls|sex|cocaine|heroine|weed|drug|card|fisting|jerk|p3do|pedo|cplove|perv|gangbang|porn|dick|penis|puzzy|pussy|boceta|anal|cum|market|sell|fraud|DN37R34P3R|atomwaffen|altright)\b").unwrap();
+
+        for (_color, username) in &users.guests {
+            let lower_name = username.to_lowercase();
+
+            // Cek nama member
+            if users.members.iter().any(|(_, member)| {
+                member.len() >= 2 && lower_name.contains(&member.to_lowercase())
+            }) {
+                let msg = format!("Username members BHC '{}' is not allowed.", username);
                 tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
-                break;
+                continue;
+            }
+
+            // Cek pola yang dilarang
+            for (pattern, name) in &banned_patterns {
+                if pattern.is_match(&lower_name) {
+                    let msg = format!("Do not use names on the blacklist '{}' ({}).", lower_name, name);
+                    tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
+                    break;
+                }
+            }
+
+            // Cek pola tambahan untuk XPLDAN
+            if account_username == XPLDAN && xpldan_patterns.is_match(&lower_name) {
+                let msg = format!("Do not use names that are on the blacklist '{}' bot ~Dantca", lower_name);
+                tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
             }
         }
-
-        // Cek pola tambahan untuk XPLDAN
-        if account_username == XPLDAN && xpldan_patterns.is_match(&lower_name) {
-            let msg = format!("Do not use names that are on the blacklist '{}' bot ~Dantca", lower_name);
-            tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
-        }
     }
-}
+    // Jika bot tidak aktif, fungsi ini tidak akan melakukan apa-apa
 }
 
 fn update_messages(
@@ -3208,35 +3213,27 @@ fn remove_prefix<'a>(s: &'a str, prefix: &str) -> &'a str {
     s.strip_prefix(prefix).unwrap_or(s)
 }
 
-// Fungsi untuk mengekstrak pesan dari dokumen HTML
 fn extract_messages(doc: &Document) -> anyhow::Result<Vec<Message>> {
     Ok(doc.find(Attr("id", "messages"))
         .next()
         .ok_or_else(|| anyhow!("Gagal mendapatkan div pesan"))?
         .find(Attr("class", "msg"))
         .filter_map(|tag| {
-            let id = tag.find(Name("input"))
-                .next()
-                .and_then(|checkbox| checkbox.attr("value"))
-                .and_then(|value| value.parse().ok());
-
+            let id = tag.find(Name("input")).next().and_then(|checkbox| checkbox.attr("value")).and_then(|value| value.parse().ok());
             let date_node = tag.find(Name("small")).next()?;
             let msg_span = tag.find(Name("span")).next()?;
-
             let date = remove_suffix(&date_node.text(), " - ").to_owned();
             let typ = match msg_span.attr("class") {
                 Some("usermsg") => MessageType::UserMsg,
                 Some("sysmsg") => MessageType::SysMsg,
                 _ => return None,
             };
-
             let (text, upload_link) = process_node(msg_span, tuiColor::White);
             Some(Message::new(id, typ, date, upload_link, text))
         })
         .collect())
 }
 
-// Fungsi untuk menggambar frame terminal
 fn draw_terminal_frame(
     f: &mut Frame<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -3244,92 +3241,103 @@ fn draw_terminal_frame(
     users: &Arc<Mutex<Users>>,
     username: &str,
 ) {
-    let layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(1), Constraint::Length(20)].as_ref())
-        .split(f.size());
+    if app.long_message.is_none() {
+        let hchunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(1), Constraint::Length(25)].as_ref())
+            .split(f.size());
 
-    if app.long_message.is_some() {
-        render_long_message(f, app, layout[0]);
+        {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(
+                    [
+                        Constraint::Length(1),
+                        Constraint::Length(3),
+                        Constraint::Min(1),
+                    ]
+                    .as_ref(),
+                )
+                .split(hchunks[0]);
+
+            render_help_txt(f, app, chunks[0], username);
+            render_textbox(f, app, chunks[1]);
+            render_messages(f, app, chunks[2], messages);
+            render_users(f, hchunks[1], users);
+        }
     } else {
-        let main_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Length(3),
-                Constraint::Min(1),
-            ].as_ref())
-            .split(layout[0]);
-
-        render_help_txt(f, app, main_layout[0], username);
-        render_textbox(f, app, main_layout[1]);
-        render_messages(f, app, main_layout[2], messages);
-        render_users(f, layout[1], users);
+        let hchunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(1)])
+            .split(f.size());
+        {
+            render_long_message(f, app, hchunks[0]);
+        }
     }
 }
 
-// Fungsi untuk menghasilkan baris-baris teks dengan warna
+
 fn gen_lines(msg_txt: &StyledText, w: usize, line_prefix: &str) -> Vec<Vec<(tuiColor, String)>> {
     let txt = msg_txt.text();
-    let wrapped = textwrap::fill(&txt, w.saturating_sub(line_prefix.len()));
-    let splits: Vec<&str> = wrapped.split('\n').collect();
+    let wrapped = textwrap::fill(&txt, w);
+    let splits = wrapped.split("\n").collect::<Vec<&str>>();
     let mut new_lines: Vec<Vec<(tuiColor, String)>> = Vec::new();
-    let mut ctxt = msg_txt.colored_text().into_iter().rev().collect::<Vec<_>>();
+    let mut ctxt = msg_txt.colored_text();
+    ctxt.reverse();
     let mut ptr = 0;
     let mut split_idx = 0;
     let mut line: Vec<(tuiColor, String)> = Vec::new();
     let mut first_in_line = true;
+    loop {
+        if let Some((color, mut txt)) = ctxt.pop() {
+            txt = txt.replace("\n", "");
+            if let Some(split) = splits.get(split_idx) {
+                if let Some(chr) = txt.chars().next() {
+                    if chr == ' ' && first_in_line {
+                        let skipped: String = txt.chars().skip(1).collect();
+                        txt = skipped;
+                    }
+                }
 
-    while let Some((color, mut txt)) = ctxt.pop() {
-        txt = txt.replace('\n', "");
-        if let Some(split) = splits.get(split_idx) {
-            if first_in_line {
-                txt = txt.trim_start().to_string();
-            }
-
-            let remain = split.len() - ptr;
-            if txt.len() <= remain {
-                ptr += txt.len();
-                line.push((color, txt));
-                first_in_line = false;
-            } else {
-                // line.push((color, txt[..remain].to_owned()));
-                new_lines.push(line);
-                line = vec![(tuiColor::White, line_prefix.to_owned())];
-                // ctxt.push((color, txt[remain..].to_owned()));
-                ptr = 0;
-                split_idx += 1;
-                first_in_line = true;
+                let remain = split.len() - ptr;
+                if txt.len() <= remain {
+                    ptr += txt.len();
+                    line.push((color, txt));
+                    first_in_line = false;
+                } else {
+                    line.push((color, txt[0..remain].to_owned()));
+                    new_lines.push(line.clone());
+                    line.clear();
+                    line.push((tuiColor::White, line_prefix.to_owned()));
+                    ctxt.push((color, txt[(remain)..].to_owned()));
+                    ptr = 0;
+                    split_idx += 1;
+                    first_in_line = true;
+                }
             }
         } else {
+            new_lines.push(line);
             break;
         }
     }
-
-    if !line.is_empty() {
-        new_lines.push(line);
-    }
-
     new_lines
 }
-
-// Fungsi untuk merender pesan panjang
 fn render_long_message(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r: Rect) {
     if let Some(m) = &app.long_message {
         let new_lines = gen_lines(&m.text, (r.width - 2) as usize, "");
 
-        let rows: Vec<Spans> = new_lines
-            .into_iter()
-            .map(|line| {
-                Spans::from(
-                    line.into_iter()
-                        .map(|(color, txt)| Span::styled(txt, Style::default().fg(color)))
-                        .collect::<Vec<_>>()
-                )
-            })
-            .collect();
+        let mut rows = vec![];
+        for line in new_lines.into_iter() {
+            let spans_vec: Vec<Span> = line
+                .into_iter()
+                .map(|(color, txt)| Span::styled(txt, Style::default().fg(color)))
+                .collect();
+            rows.push(Spans::from(spans_vec));
+        }
 
-        let messages_list = List::new(vec![ListItem::new(rows)])
+        let messages_list_items = vec![ListItem::new(rows)];
+
+        let messages_list = List::new(messages_list_items)
             .block(Block::default().borders(Borders::ALL).title(""))
             .highlight_style(
                 Style::default()
@@ -3340,80 +3348,26 @@ fn render_long_message(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut Ap
         f.render_widget(messages_list, r);
     }
 }
-fn render_help_txt(
-    f: &mut Frame<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
-    r: Rect,
-    curr_user: &str,
-) {
+
+
+fn render_help_txt(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r: Rect, curr_user: &str) {
     let (mut msg, style) = match app.input_mode {
-        InputMode::Normal => (
-            vec![
-                Span::raw("Press "),
-                Span::styled("shift + q", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" to exit, "),
-                Span::styled("i", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" to start editing."),
-            ],
-            Style::default(),
-        ),
-        InputMode::Editing | InputMode::EditingErr => (
-            vec![
-                Span::raw("Press "),
-                Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" to stop editing, "),
-                Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" to record the message"),
-            ],
-            Style::default(),
-        ),
+        InputMode::Normal => (vec![Span::raw("Press "), Span::styled("shift + q", Style::default().add_modifier(Modifier::BOLD)), Span::raw(" to exit, "), Span::styled("i", Style::default().add_modifier(Modifier::BOLD)), Span::raw(" to start editing.")], Style::default()),
+        InputMode::Editing | InputMode::EditingErr => (vec![Span::raw("Press "), Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)), Span::raw(" to stop editing, "), Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)), Span::raw(" to record the message")], Style::default()),
         InputMode::LongMessage => (vec![], Style::default()),
     };
     msg.push(Span::raw(format!(" | {}", curr_user)));
-    
-    let (mute_text, mute_style) = if app.is_muted {
-        ("muted", Style::default().fg(tuiColor::Red).add_modifier(Modifier::BOLD))
-    } else {
-        ("not muted", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD))
-    };
+    let (mute_text, mute_style) = if app.is_muted { ("muted", Style::default().fg(tuiColor::Red).add_modifier(Modifier::BOLD)) } else { ("not muted", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD)) };
     msg.extend(vec![Span::raw(" | "), Span::styled(mute_text, mute_style)]);
-
-    let (guest_text, guest_style) = if app.display_guest_view {
-        ("G", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD))
-    } else {
-        ("G", Style::default().fg(tuiColor::Gray))
-    };
+    let (guest_text, guest_style) = if app.display_guest_view { ("G", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD)) } else { ("G", Style::default().fg(tuiColor::Gray)) };
     msg.extend(vec![Span::raw(" | "), Span::styled(guest_text, guest_style)]);
-
-    let (member_text, member_style) = if app.display_member_view {
-        ("M", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD))
-    } else {
-        ("M", Style::default().fg(tuiColor::Gray))
-    };
+    let (member_text, member_style) = if app.display_member_view { ("M", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD)) } else { ("M", Style::default().fg(tuiColor::Gray)) };
     msg.extend(vec![Span::raw(" | "), Span::styled(member_text, member_style)]);
-
-    let (bot_text, bot_style) = unsafe {
-        if BOT_ACTIVE {
-            ("Dantca Actived", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD))
-        } else {
-            ("Dantca Deactived", Style::default().fg(tuiColor::Red))
-        }
-    };
+    let (bot_text, bot_style) = unsafe { if BOT_ACTIVE { ("Dantca Actived", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD)) } else { ("Dantca Deactived", Style::default().fg(tuiColor::Red)) } };
     msg.extend(vec![Span::raw(" | "), Span::styled(bot_text, bot_style)]);
-
     let ping = get_ping();
-    let ping_style = if ping < 100 {
-        Style::default().fg(tuiColor::Green)
-    } else if ping < 300 {
-        Style::default().fg(tuiColor::Yellow)
-    } else {
-        Style::default().fg(tuiColor::Red)
-    };
-    msg.extend(vec![
-        Span::raw(" | Ping: "),
-        Span::styled(format!("{}ms", ping), ping_style),
-    ]);
-
+    let ping_style = if ping < 100 { Style::default().fg(tuiColor::Green) } else if ping < 300 { Style::default().fg(tuiColor::Yellow) } else { Style::default().fg(tuiColor::Red) };
+    msg.extend(vec![Span::raw(" | Ping: "), Span::styled(format!("{}ms", ping), ping_style)]);
     let mut text = Text::from(Spans::from(msg));
     text.patch_style(style);
     let help_message = Paragraph::new(text);
@@ -3421,12 +3375,17 @@ fn render_help_txt(
 }
 
 fn get_ping() -> u64 {
-    // Implementasi sederhana untuk mendapatkan ping
-    // Dalam contoh ini, kita akan menggunakan waktu acak antara 50ms dan 500ms
-    // Untuk implementasi yang sebenarnya, Anda perlu mengukur waktu respons dari server
+    // Menghitung kecepatan dari Tor
+    let start = std::time::Instant::now();
     
-    let mut rng = rand::thread_rng();
-    rng.gen_range(50..500)
+    // Lakukan koneksi ke jaringan Tor di sini
+    // Contoh: Anda bisa menggunakan library seperti 'reqwest' dengan proxy Tor
+    // untuk melakukan request ke suatu situs
+    
+    // Simulasi delay koneksi Tor
+    
+    let duration = start.elapsed();
+    duration.as_millis() as u64
 }
 
 // Komentar: Fungsi get_ping() mengembalikan nilai ping acak
@@ -3441,131 +3400,71 @@ fn render_textbox(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r:
         overflow = std::cmp::max(app.input.width() - w, 0);
         input_str = &str[overflow..];
     }
-    let input = Paragraph::new(input_str)
-        .style(match app.input_mode {
-            InputMode::LongMessage => Style::default(),
-            InputMode::Normal => Style::default(),
-            InputMode::Editing => Style::default().fg(tuiColor::Yellow),
-            InputMode::EditingErr => Style::default().fg(tuiColor::Red),
-        })
-        .block(Block::default().borders(Borders::ALL).title("Input"));
+    let input = Paragraph::new(input_str).style(match app.input_mode {
+        InputMode::LongMessage => Style::default(),
+        InputMode::Normal => Style::default(),
+        InputMode::Editing => Style::default().fg(tuiColor::Yellow),
+        InputMode::EditingErr => Style::default().fg(tuiColor::Red),
+    }).block(Block::default().borders(Borders::ALL).title("Input"));
     f.render_widget(input, r);
     match app.input_mode {
         InputMode::LongMessage => {}
-        InputMode::Normal =>
-            // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
-            {}
-
+        InputMode::Normal => {}
         InputMode::Editing | InputMode::EditingErr => {
-            // Make the cursor visible and ask tui-rs to put it at the specified coordinates after rendering
-            f.set_cursor(
-                // Put cursor past the end of the input text
-                r.x + app.input_idx as u16 - overflow as u16 + 1,
-                // Move one line down, from the border to the input line
-                r.y + 1,
-            )
+            f.set_cursor(r.x + app.input_idx as u16 - overflow as u16 + 1, r.y + 1)
         }
     }
 }
+
 // xpldan code
-fn render_messages(
-    f: &mut Frame<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
-    r: Rect,
-    messages: &Arc<Mutex<Vec<Message>>>,
-) {
-    // Messages
+fn render_messages(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r: Rect, messages: &Arc<Mutex<Vec<Message>>>) {
     app.items.items.clear();
     let messages = messages.lock().unwrap();
-    let messages_list_items: Vec<ListItem> = messages
-        .iter()
-        .filter_map(|m| {
-            if !app.display_hidden_msgs && m.hide {
-                return None;
+    let messages_list_items: Vec<ListItem> = messages.iter().filter_map(|m| {
+        if !app.display_hidden_msgs && m.hide { return None; }
+        if app.display_guest_view {
+            let text = m.text.text();
+            if text.starts_with(&app.members_tag) || text.starts_with(&app.staffs_tag) { return None; }
+            if let Some((_, Some(_), _)) = get_message(&m.text, &app.members_tag) { return None; }
+        }
+        if app.display_member_view {
+            let text = m.text.text();
+            if !text.starts_with(&app.members_tag) && !text.starts_with(&app.staffs_tag) { return None; }
+            if let Some((_, Some(_), _)) = get_message(&m.text, &app.members_tag) { return None; }
+        }
+        if app.filter != "" && !m.text.text().to_lowercase().contains(&app.filter.to_lowercase()) { return None; }
+        app.items.items.push(m.clone());
+        let new_lines = gen_lines(&m.text, (r.width - 20) as usize, " ".repeat(17).as_str());
+        let mut rows = vec![];
+        let date_style = match (m.deleted, m.hide) {
+            (false, true) => Style::default().fg(tuiColor::Gray),
+            (false, _) => Style::default().fg(tuiColor::DarkGray),
+            (true, _) => Style::default().fg(tuiColor::Red),
+        };
+        let mut spans_vec = vec![Span::styled(m.date.clone(), date_style)];
+        let show_sys_sep = app.show_sys && m.typ == MessageType::SysMsg;
+        let sep = if show_sys_sep { " * " } else { ">->  " };
+        spans_vec.push(Span::raw(sep));
+        for (idx, line) in new_lines.into_iter().enumerate() {
+            if idx >= 5 {
+                spans_vec.push(Span::styled("                 […]", Style::default().fg(tuiColor::White)));
+                rows.push(Spans::from(spans_vec));
+                break;
             }
-            // Simulate a guest view (remove "PMs" and "Members chat" messages)
-            if app.display_guest_view {
-                // TODO: this is not efficient at all
-                let text = m.text.text();
-                if text.starts_with(&app.members_tag) || text.starts_with(&app.staffs_tag) {
-                    return None;
-                }
-                if let Some((_, Some(_), _)) = get_message(&m.text, &app.members_tag) {
-                    return None;
-                }
+            for (color, txt) in line {
+                spans_vec.push(Span::styled(txt, Style::default().fg(color)));
             }
-
-            // Strange
-            // Display only messages from members and staff
-            if app.display_member_view {
-                // In members mode, include only messages from members and staff
-                let text = m.text.text();
-                if !text.starts_with(&app.members_tag) && !text.starts_with(&app.staffs_tag) {
-                    return None;
-                }
-                if let Some((_, Some(_), _)) = get_message(&m.text, &app.members_tag) {
-                    return None;
-                }
-            }
-
-            if app.filter != "" {
-                if !m
-                    .text
-                    .text()
-                    .to_lowercase()
-                    .contains(&app.filter.to_lowercase())
-                {
-                    return None;
-                }
-            }
-
-            app.items.items.push(m.clone());
-
-            let new_lines = gen_lines(&m.text, (r.width - 20) as usize, " ".repeat(17).as_str());
-
-            let mut rows = vec![];
-            let date_style = match (m.deleted, m.hide) {
-                (false, true) => Style::default().fg(tuiColor::Gray),
-                (false, _) => Style::default().fg(tuiColor::DarkGray),
-                (true, _) => Style::default().fg(tuiColor::Red),
-            };
-            let mut spans_vec = vec![Span::styled(m.date.clone(), date_style)];
-            let show_sys_sep = app.show_sys && m.typ == MessageType::SysMsg;
-            let sep = if show_sys_sep { " * " } else { ">->  " };
-            spans_vec.push(Span::raw(sep));
-            for (idx, line) in new_lines.into_iter().enumerate() {
-                // Spams can take your whole screen, so we limit to 5 lines.
-                if idx >= 5 {
-                    spans_vec.push(Span::styled(
-                        "                 […]",
-                        Style::default().fg(tuiColor::White),
-                    ));
-                    rows.push(Spans::from(spans_vec));
-                    break;
-                }
-                for (color, txt) in line {
-                    spans_vec.push(Span::styled(txt, Style::default().fg(color)));
-                }
-                rows.push(Spans::from(spans_vec.clone()));
-                spans_vec.clear();
-            }
-
-            let style = match (m.deleted, m.hide) {
-                (true, _) => Style::default().bg(tuiColor::Rgb(30, 0, 0)),
-                (_, true) => Style::default().bg(tuiColor::Rgb(20, 20, 20)),
-                _ => Style::default(),
-            };
-            Some(ListItem::new(rows).style(style))
-        })
-        .collect();
-
-    let messages_list = List::new(messages_list_items)
-        .block(Block::default().borders(Borders::ALL).title("Messages"))
-        .highlight_style(
-            Style::default()
-                .bg(tuiColor::Rgb(50, 50, 50))
-                .add_modifier(Modifier::BOLD),
-        );
+            rows.push(Spans::from(spans_vec.clone()));
+            spans_vec.clear();
+        }
+        let style = match (m.deleted, m.hide) {
+            (true, _) => Style::default().bg(tuiColor::Rgb(30, 0, 0)),
+            (_, true) => Style::default().bg(tuiColor::Rgb(20, 20, 20)),
+            _ => Style::default(),
+        };
+        Some(ListItem::new(rows).style(style))
+    }).collect();
+    let messages_list = List::new(messages_list_items).block(Block::default().borders(Borders::ALL).title("Messages")).highlight_style(Style::default().bg(tuiColor::Rgb(50, 50, 50)).add_modifier(Modifier::BOLD));
     f.render_stateful_widget(messages_list, r, &mut app.items.state)
 }
 
