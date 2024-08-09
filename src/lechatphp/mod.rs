@@ -280,7 +280,7 @@ pub fn login(
         Some(view) => view,
         None => {
             fs::write("./dump_login_err.html", resp.as_str()).unwrap();
-            panic!("failed to get view iframe");
+            return Err(LoginErr::UnknownErr); // Ubah panic menjadi return Err
         }
     };
     let iframe_src = iframe.attr("src").unwrap();

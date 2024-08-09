@@ -58,6 +58,12 @@ const LANG: &str = "en";
 const SEND_TO_ALL: &str = "s *";
 const SEND_TO_MEMBERS: &str = "s ?";
 static mut BOT_ACTIVE: bool = false;
+static mut REMOVE_NAME: bool = false;
+
+// Fungsi untuk mengatur BOT_ACTIVE dan REMOVE_NAME
+
+// Komentar: Fungsi-fungsi terpisah untuk mengatur BOT_ACTIVE dan REMOVE_NAME
+// Ini memungkinkan pengaturan REMOVE_NAME tanpa mempengaruhi BOT_ACTIVE
 const SEND_TO_STAFFS: &str = "s %";
 const SEND_TO_ADMINS: &str = "s _";
 const SOUND1: &[u8] = include_bytes!("sound1.mp3");
@@ -82,6 +88,7 @@ lazy_static! {
     static ref COLOR_RGX: Regex = Regex::new(r#"color:\s*([#\w]+)\s*;"#).unwrap();
     static ref COLOR1_RGX: Regex = Regex::new(r#"^#([0-9A-Fa-f]{6})$"#).unwrap();
     static ref PM_RGX: Regex = Regex::new(r#"^/pm ([^\s]+) (.*)"#).unwrap();
+    static ref DANTCA_ACTIVATORS: Mutex<Vec<String>> = Mutex::new(Vec::new());
     static ref KICK_RGX: Regex = Regex::new(r#"^/(?:kick|k) ([^\s]+)\s?(.*)"#).unwrap();
     static ref IGNORE_RGX: Regex = Regex::new(r#"^/ignore ([^\s]+)"#).unwrap();
     static ref UNIGNORE_RGX: Regex = Regex::new(r#"^/unignore ([^\s]+)"#).unwrap();
@@ -695,7 +702,6 @@ impl LeChatPHPClient {
             }
         }
     }
-
     fn handle_long_message_mode_key_event(
         &mut self,
         app: &mut App,
@@ -729,7 +735,18 @@ impl LeChatPHPClient {
         key_event: KeyEvent,
         messages: &Arc<Mutex<Vec<Message>>>,
     ) -> Result<(), ExitSignal> {
-        match key_event {           
+        match key_event {      
+            KeyEvent {
+                code: KeyCode::Char('r'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_toggle_dantca(app), 
+            // damtca actived  
+            KeyEvent{
+                code:KeyCode::Char('R'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_remove_name(app),
             KeyEvent {
                 code: KeyCode::Char('u'),
                 modifiers: KeyModifiers::CONTROL,
@@ -785,31 +802,16 @@ impl LeChatPHPClient {
                 modifiers: KeyModifiers::SHIFT,
                 ..
             } => self.handle_normal_mode_key_event_yank_link(app),
-
-            //Strange
             KeyEvent {
                 code: KeyCode::Char('D'),
                 modifiers: KeyModifiers::SHIFT,
                 ..
             } => self.handle_normal_mode_key_event_download_link(app),
-
-            //Strange
             KeyEvent {
                 code: KeyCode::Char('d'),
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.handle_normal_mode_key_event_download_and_view(app),
-
-            // KeyEvent {
-            //     code: KeyCode::Char('d'),
-            //     modifiers: KeyModifiers::NONE,
-            //     ..
-            // } => self.handle_normal_mode_key_event_debug(app),
-            // KeyEvent {
-            //     code: KeyCode::Char('D'),
-            //     modifiers: KeyModifiers::SHIFT,
-            //     ..
-            // } => self.handle_normal_mode_key_event_debug2(app),
             KeyEvent {
                 code: KeyCode::Char('m'),
                 modifiers: KeyModifiers::NONE,
@@ -907,6 +909,8 @@ impl LeChatPHPClient {
         Ok(())
     }
 
+
+
     fn handle_editing_mode_key_event(
         &mut self,
         app: &mut App,
@@ -915,12 +919,7 @@ impl LeChatPHPClient {
     ) -> Result<(), ExitSignal> {
         app.input_mode = InputMode::Editing;
         match key_event {
-            KeyEvent {
-                code: KeyCode::Char('r'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => self.handle_toggle_dantca(app), 
-            // damtca actived
+       
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
@@ -1009,15 +1008,22 @@ impl LeChatPHPClient {
   
     fn handle_toggle_dantca(&mut self, _app: &mut App) {
         // Mengubah status BOT_ACTIVE
-        unsafe {
+        let bot_active = unsafe {
             BOT_ACTIVE = !BOT_ACTIVE;
-        }
+            BOT_ACTIVE
+        };
 
-        let msg_actived_bot = if unsafe { BOT_ACTIVE } {
+        let msg_actived_bot = if bot_active {
+            unsafe {
+                REMOVE_NAME = true;
+            }
             // Pesan ketika bot diaktifkan
             ">>> [color=#ffffff]Dantca patch update on system >> ..... configuration successful.. not error report > - < actived with panel control[/color] <<< |3 min removed |"
            
         } else {
+            unsafe {
+                REMOVE_NAME = false;
+            }
             // Pesan ketika bot dinonaktifkan
             ">>> [color=#ffffff]Dantca Deactived with panel control[/color] <<< |3 min removed |"
         };
@@ -1028,14 +1034,29 @@ impl LeChatPHPClient {
         }
         
         // Kirim file saat bot diaktifkan
-        if unsafe { BOT_ACTIVE } {
-            match self.tx.send(PostType::Upload("1564478315_1337 2.0.gif".to_string(), SEND_TO_ALL.to_owned(), "Dantca Actived HAHAHA".to_string())) {
+        if bot_active {
+            let file_name = "1564478315_1337 2.0.gif".to_string();
+            let message = "Dantca Actived HAHAHA".to_string();
+            match self.tx.send(PostType::Upload(file_name, SEND_TO_ALL.to_owned(), message)) {
                 Ok(_) => {},
                 Err(e) => eprintln!("Gagal mengirim file: {:?}", e),
             }
         }
     }
-
+fn handle_remove_name(&mut self, _app: &mut App) {
+    unsafe { 
+        REMOVE_NAME = !REMOVE_NAME;
+    }
+    let message = if unsafe { REMOVE_NAME } {
+        "Blocked Name is now active [@Xpldan]".to_string()
+    } else {
+        "Blocked Name is now inactive [@Xpldan]".to_string()
+    };
+    // Mengirim pesan dan menangani hasilnya
+    if let Err(e) = self.post_msg(PostType::Post(message, Some(SEND_TO_MEMBERS.to_owned()))) {
+        eprintln!("Gagal mengirim pesan: {:?}", e);
+    }
+}
     fn handle_long_message_mode_key_event_esc(&mut self, app: &mut App) {
         app.long_message = None;
         app.input_mode = InputMode::Normal;
@@ -1295,6 +1316,15 @@ impl LeChatPHPClient {
     }
 
     fn handle_normal_mode_key_event_logout(&mut self) -> Result<(), ExitSignal> {
+        // Hapus semua pesan
+        if let Err(e) = self.post_msg(PostType::DeleteAll) {
+            eprintln!("Gagal menghapus semua pesan: {:?}", e);
+        }
+
+        // Tunggu sebentar untuk memastikan pesan terhapus
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        // Lakukan logout
         self.logout().unwrap();
         return Err(ExitSignal::Terminate);
     }
@@ -2000,6 +2030,7 @@ fn process_new_messages(
 
                 unsafe {
                     if BOT_ACTIVE {
+
                         let users_lock = users.lock().unwrap();
                         dantca_imps_proses(&from, &msg, tx, &users_lock);
                     }
@@ -2046,22 +2077,33 @@ fn dantca_help(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
     )).unwrap();
 
 }
+// Fungsi untuk mengatur BOT_ACTIVE dan REMOVE_NAME
 
 fn toggle_bot_active(active: bool, tx: &crossbeam_channel::Sender<PostType>, from: &str) {
     unsafe {
         BOT_ACTIVE = active;
+        REMOVE_NAME = active;
     }
-    let status_message = if active {
-        format!("[color=#ffffff]>[] -- Dantca Actived By @{} -- []<[/color] ", from)
-    } else {
-        format!("[color=#ffffff]>[] -- Dantca Deactived By @{} -- []<[/color]", from)
-    };
-    tx.send(PostType::Post(status_message, None)).unwrap();
+    
+    let status = if active { "Activated" } else { "Deactivated" };
+    let message = format!(">> -- [color=#ffffff]Dantca Has Been {} By[/color] - [@{}] -- <", status, from);
+    
+    if let Err(e) = tx.send(PostType::Post(message, Some(SEND_TO_ALL.to_owned()))) {
+        eprintln!("Gagal mengirim pesan: {:?}", e);
+    }
+
+    if active && {
+        let activation_message = format!(">> -- [color=#ffffff]Dantca still activated [/color] - [@{}] -- <", from);
+        if let Err(e) = tx.send(PostType::Post(activation_message, Some(SEND_TO_ALL.to_owned()))) {
+            eprintln!("Gagal mengirim pesan aktivasi: {:?}", e);
+        }
+    }
 }
 
+
+// Komentar: Fungsi check_bot_status sekarang menggunakan is_bot_active()
 fn check_bot_status(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
-    let status = unsafe { BOT_ACTIVE };
-    let status_message = if status {
+    let status_message = if unsafe { BOT_ACTIVE } {
         "> - Dantca Still Running - <"
     } else {
         "> - Dantca Not Running - <"
@@ -2387,9 +2429,13 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
 fn ban_imposters(tx: &crossbeam_channel::Sender<PostType>, account_username: &str, users: &Users) {
     // Menggunakan unsafe block untuk mengakses BOT_ACTIVE
     let bot_active = unsafe { BOT_ACTIVE };
+    let mut remove_name = unsafe { REMOVE_NAME };
+    if bot_active {
+        remove_name = true;
+    }
 
     // Hanya jalankan fungsi jika bot aktif
-    if bot_active {
+    if bot_active || remove_name {
         // Hanya jalankan jika tidak ada admin atau staff (kecuali XPLDAN)
         if !users.admin.is_empty() || (!users.staff.is_empty() && account_username != XPLDAN) {
             return;
@@ -2420,7 +2466,7 @@ fn ban_imposters(tx: &crossbeam_channel::Sender<PostType>, account_username: &st
             if users.members.iter().any(|(_, member)| {
                 member.len() >= 2 && lower_name.contains(&member.to_lowercase())
             }) {
-                let msg = format!("Username members BHC '{}' is not allowed.", username);
+                let msg = format!("Username members BHC '{}' is not allowed. ~ Dantca bot", username);
                 tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
                 continue;
             }
@@ -2428,7 +2474,7 @@ fn ban_imposters(tx: &crossbeam_channel::Sender<PostType>, account_username: &st
             // Cek pola yang dilarang
             for (pattern, name) in &banned_patterns {
                 if pattern.is_match(&lower_name) {
-                    let msg = format!("Do not use names on the blacklist '{}' ({}).", lower_name, name);
+                    let msg = format!("Do not use names on the blacklist '{}' ({}). ~Dantca bot", lower_name, name);
                     tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
                     break;
                 }
@@ -2440,6 +2486,8 @@ fn ban_imposters(tx: &crossbeam_channel::Sender<PostType>, account_username: &st
                 tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
             }
         }
+    }else{
+        return;
     }
     // Jika bot tidak aktif, fungsi ini tidak akan melakukan apa-apa
 }
@@ -3242,10 +3290,15 @@ fn draw_terminal_frame(
     username: &str,
 ) {
     if app.long_message.is_none() {
+        let vchunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(5)].as_ref())
+            .split(f.size());
+
         let hchunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Min(1), Constraint::Length(25)].as_ref())
-            .split(f.size());
+            .split(vchunks[0]);
 
         {
             let chunks = Layout::default()
@@ -3265,6 +3318,9 @@ fn draw_terminal_frame(
             render_messages(f, app, chunks[2], messages);
             render_users(f, hchunks[1], users);
         }
+        
+        // Komentar: Menambahkan pemanggilan fungsi render_warned_users
+        render_warned_users(f, vchunks[1], users);
     } else {
         let hchunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -3276,11 +3332,10 @@ fn draw_terminal_frame(
     }
 }
 
-
 fn gen_lines(msg_txt: &StyledText, w: usize, line_prefix: &str) -> Vec<Vec<(tuiColor, String)>> {
     let txt = msg_txt.text();
     let wrapped = textwrap::fill(&txt, w);
-    let splits = wrapped.split("\n").collect::<Vec<&str>>();
+    let splits: Vec<&str> = wrapped.split('\n').collect();
     let mut new_lines: Vec<Vec<(tuiColor, String)>> = Vec::new();
     let mut ctxt = msg_txt.colored_text();
     ctxt.reverse();
@@ -3288,38 +3343,43 @@ fn gen_lines(msg_txt: &StyledText, w: usize, line_prefix: &str) -> Vec<Vec<(tuiC
     let mut split_idx = 0;
     let mut line: Vec<(tuiColor, String)> = Vec::new();
     let mut first_in_line = true;
-    loop {
-        if let Some((color, mut txt)) = ctxt.pop() {
-            txt = txt.replace("\n", "");
-            if let Some(split) = splits.get(split_idx) {
-                if let Some(chr) = txt.chars().next() {
-                    if chr == ' ' && first_in_line {
-                        let skipped: String = txt.chars().skip(1).collect();
-                        txt = skipped;
-                    }
-                }
 
-                let remain = split.len() - ptr;
-                if txt.len() <= remain {
-                    ptr += txt.len();
-                    line.push((color, txt));
-                    first_in_line = false;
-                } else {
-                    line.push((color, txt[0..remain].to_owned()));
-                    new_lines.push(line.clone());
-                    line.clear();
-                    line.push((tuiColor::White, line_prefix.to_owned()));
-                    ctxt.push((color, txt[(remain)..].to_owned()));
-                    ptr = 0;
-                    split_idx += 1;
-                    first_in_line = true;
+    while let Some((color, mut txt)) = ctxt.pop() {
+        txt = txt.replace('\n', "");
+        if let Some(split) = splits.get(split_idx) {
+            if let Some(chr) = txt.chars().next() {
+                if chr == ' ' && first_in_line {
+                    txt = txt.chars().skip(1).collect();
                 }
             }
+
+            let remain = split.len().saturating_sub(ptr);
+            if txt.len() <= remain {
+                ptr += txt.len();
+                line.push((color, txt));
+                first_in_line = false;
+            } else {
+                if remain > 0 {
+                    line.push((color, txt[..remain].to_owned()));
+                }
+                new_lines.push(line);
+                line = vec![(tuiColor::White, line_prefix.to_owned())];
+                if remain < txt.len() {
+                    ctxt.push((color, txt[remain..].to_owned()));
+                }
+                ptr = 0;
+                split_idx += 1;
+                first_in_line = true;
+            }
         } else {
-            new_lines.push(line);
             break;
         }
     }
+
+    if !line.is_empty() {
+        new_lines.push(line);
+    }
+
     new_lines
 }
 fn render_long_message(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r: Rect) {
@@ -3349,6 +3409,9 @@ fn render_long_message(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut Ap
     }
 }
 
+// Fungsi untuk menangani tombol Ctrl+M
+
+
 
 fn render_help_txt(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r: Rect, curr_user: &str) {
     let (mut msg, style) = match app.input_mode {
@@ -3365,27 +3428,14 @@ fn render_help_txt(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r
     msg.extend(vec![Span::raw(" | "), Span::styled(member_text, member_style)]);
     let (bot_text, bot_style) = unsafe { if BOT_ACTIVE { ("Dantca Actived", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD)) } else { ("Dantca Deactived", Style::default().fg(tuiColor::Red)) } };
     msg.extend(vec![Span::raw(" | "), Span::styled(bot_text, bot_style)]);
-    let ping = get_ping();
-    let ping_style = if ping < 100 { Style::default().fg(tuiColor::Green) } else if ping < 300 { Style::default().fg(tuiColor::Yellow) } else { Style::default().fg(tuiColor::Red) };
-    msg.extend(vec![Span::raw(" | Ping: "), Span::styled(format!("{}ms", ping), ping_style)]);
+    let (remove_name_text, remove_name_style) = unsafe { if REMOVE_NAME { ("Remove Name", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD)) } else { ("Remove Name", Style::default().fg(tuiColor::Red)) } };
+    msg.extend(vec![Span::raw(" | "), Span::styled(remove_name_text, remove_name_style)]);
+    
+
     let mut text = Text::from(Spans::from(msg));
     text.patch_style(style);
     let help_message = Paragraph::new(text);
     f.render_widget(help_message, r);
-}
-
-fn get_ping() -> u64 {
-    // Menghitung kecepatan dari Tor
-    let start = std::time::Instant::now();
-    
-    // Lakukan koneksi ke jaringan Tor di sini
-    // Contoh: Anda bisa menggunakan library seperti 'reqwest' dengan proxy Tor
-    // untuk melakukan request ke suatu situs
-    
-    // Simulasi delay koneksi Tor
-    
-    let duration = start.elapsed();
-    duration.as_millis() as u64
 }
 
 // Komentar: Fungsi get_ping() mengembalikan nilai ping acak
@@ -3418,81 +3468,159 @@ fn render_textbox(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r:
 
 // xpldan code
 fn render_messages(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r: Rect, messages: &Arc<Mutex<Vec<Message>>>) {
-    app.items.items.clear();
     let messages = messages.lock().unwrap();
-    let messages_list_items: Vec<ListItem> = messages.iter().filter_map(|m| {
-        if !app.display_hidden_msgs && m.hide { return None; }
-        if app.display_guest_view {
-            let text = m.text.text();
-            if text.starts_with(&app.members_tag) || text.starts_with(&app.staffs_tag) { return None; }
-            if let Some((_, Some(_), _)) = get_message(&m.text, &app.members_tag) { return None; }
-        }
-        if app.display_member_view {
-            let text = m.text.text();
-            if !text.starts_with(&app.members_tag) && !text.starts_with(&app.staffs_tag) { return None; }
-            if let Some((_, Some(_), _)) = get_message(&m.text, &app.members_tag) { return None; }
-        }
-        if app.filter != "" && !m.text.text().to_lowercase().contains(&app.filter.to_lowercase()) { return None; }
-        app.items.items.push(m.clone());
-        let new_lines = gen_lines(&m.text, (r.width - 20) as usize, " ".repeat(17).as_str());
-        let mut rows = vec![];
-        let date_style = match (m.deleted, m.hide) {
-            (false, true) => Style::default().fg(tuiColor::Gray),
-            (false, _) => Style::default().fg(tuiColor::DarkGray),
-            (true, _) => Style::default().fg(tuiColor::Red),
+    
+    // Komentar: Memperbarui app.items.items dengan messages yang telah difilter
+    app.items.items = messages.iter()
+        .filter(|m| should_display_message(app, m))
+        .cloned()
+        .collect();
+
+    let messages_list_items: Vec<ListItem> = app.items.items.iter()
+        .map(|m| create_message_list_item(m, &app, r.width.saturating_sub(2)))
+        .collect();
+
+    let messages_list = List::new(messages_list_items)
+        .block(Block::default().borders(Borders::ALL).title("Messages"))
+        .highlight_style(Style::default().bg(tuiColor::Rgb(50, 50, 50)).add_modifier(Modifier::BOLD));
+    
+    let mut items_state = app.items.state.clone();
+    f.render_stateful_widget(messages_list, r, &mut items_state);
+    app.items.state = items_state;
+}
+
+fn should_display_message(app: &App, m: &Message) -> bool {
+    (!app.display_hidden_msgs && !m.hide) &&
+    (!app.display_guest_view || !is_member_or_staff_message(m, app)) &&
+    (!app.display_member_view || is_member_or_staff_message(m, app)) &&
+    (app.filter.is_empty() || m.text.text().to_lowercase().contains(&app.filter.to_lowercase()))
+}
+
+fn is_member_or_staff_message(m: &Message, app: &App) -> bool {
+    let text = m.text.text();
+    text.starts_with(&app.members_tag) || 
+    text.starts_with(&app.staffs_tag) || 
+    get_message(&m.text, &app.members_tag).map_or(false, |(_, color, _)| color.is_some())
+}
+
+fn create_message_list_item<'a>(m: &'a Message, app: &'a App, width: u16) -> ListItem<'a> {
+    let style = get_message_style(m);
+    let rows = create_message_rows(m, app, width);
+    ListItem::new(rows).style(style)
+}
+
+fn get_message_style(m: &Message) -> Style {
+    if m.deleted {
+        Style::default().bg(tuiColor::Rgb(30, 0, 0))
+    } else if m.hide {
+        Style::default().bg(tuiColor::Rgb(20, 20, 20))
+    } else {
+        Style::default()
+    }
+}
+
+fn create_message_rows<'a>(m: &'a Message, app: &'a App, width: u16) -> Vec<Spans<'a>> {
+    let new_lines = gen_lines(&m.text, width.saturating_sub(20) as usize, " ".repeat(17).as_str());
+    let mut rows = Vec::with_capacity(std::cmp::min(new_lines.len(), 5));
+    let date_style = get_date_style(m);
+    let sep = if app.show_sys && m.typ == MessageType::SysMsg { " * " } else { " >-> " };
+    
+    for (idx, line) in new_lines.iter().take(5).enumerate() {
+        let mut spans_vec = if idx == 0 {
+            vec![Span::styled(m.date.clone(), date_style), Span::raw(sep)]
+        } else {
+            Vec::new()
         };
-        let mut spans_vec = vec![Span::styled(m.date.clone(), date_style)];
-        let show_sys_sep = app.show_sys && m.typ == MessageType::SysMsg;
-        let sep = if show_sys_sep { " * " } else { ">->  " };
-        spans_vec.push(Span::raw(sep));
-        for (idx, line) in new_lines.into_iter().enumerate() {
-            if idx >= 5 {
-                spans_vec.push(Span::styled("                 […]", Style::default().fg(tuiColor::White)));
-                rows.push(Spans::from(spans_vec));
-                break;
-            }
-            for (color, txt) in line {
-                spans_vec.push(Span::styled(txt, Style::default().fg(color)));
-            }
-            rows.push(Spans::from(spans_vec.clone()));
-            spans_vec.clear();
+        
+        for (color, txt) in line {
+            spans_vec.push(Span::styled(txt.clone(), Style::default().fg(*color)));
         }
-        let style = match (m.deleted, m.hide) {
-            (true, _) => Style::default().bg(tuiColor::Rgb(30, 0, 0)),
-            (_, true) => Style::default().bg(tuiColor::Rgb(20, 20, 20)),
-            _ => Style::default(),
-        };
-        Some(ListItem::new(rows).style(style))
-    }).collect();
-    let messages_list = List::new(messages_list_items).block(Block::default().borders(Borders::ALL).title("Messages")).highlight_style(Style::default().bg(tuiColor::Rgb(50, 50, 50)).add_modifier(Modifier::BOLD));
-    f.render_stateful_widget(messages_list, r, &mut app.items.state)
+        
+        rows.push(Spans::from(spans_vec));
+    }
+    
+    if new_lines.len() > 5 {
+        rows.push(Spans::from(vec![Span::styled("                 […]", Style::default().fg(tuiColor::White))]));
+    }
+    
+    rows
+}
+
+fn get_date_style(m: &Message) -> Style {
+    match (m.deleted, m.hide) {
+        (false, true) => Style::default().fg(tuiColor::Gray),
+        (false, _) => Style::default().fg(tuiColor::DarkGray),
+        (true, _) => Style::default().fg(tuiColor::Red),
+    }
 }
 
 fn render_users(f: &mut Frame<CrosstermBackend<io::Stdout>>, r: Rect, users: &Arc<Mutex<Users>>) {
-    // Users lists
     let users = users.lock().unwrap();
     let mut users_list: Vec<ListItem> = vec![];
-    let mut users_types: Vec<(&Vec<(tuiColor, String)>, &str)> = Vec::new();
-    users_types.push((&users.admin, "-- Admin --"));
-    users_types.push((&users.staff, "-- Staff --"));
-    users_types.push((&users.members, "-- Members --"));
-    users_types.push((&users.guests, "-- Guests --"));
+    let users_types = vec![
+        (&users.admin, "-- Admin --"),
+        (&users.staff, "-- Staff --"),
+        (&users.members, "-- Members --"),
+        (&users.guests, "-- Guests --"),
+    ];
 
-    for (user_group, label) in users_types.iter_mut() {
-        users_list.push(ListItem::new(Span::raw(*label)));
-        for (tui_color, username) in user_group.iter() {
+    for (user_group, label) in users_types {
+        users_list.push(ListItem::new(Span::raw(label)));
+        for (tui_color, username) in user_group {
             let span = Span::styled(username, Style::default().fg(*tui_color));
             users_list.push(ListItem::new(span));
         }
     }
 
-    let users_widget = List::new(users_list).block(Block::default().borders(Borders::ALL).title("Users"));
+    let users_widget = List::new(users_list)
+        .block(Block::default().borders(Borders::ALL).title("Users"));
     f.render_widget(users_widget, r);
+}
+use tui::widgets::BorderType;
+// Komentar: Fungsi render_warned_users diubah agar dapat digunakan
+ fn render_warned_users(f: &mut Frame<CrosstermBackend<io::Stdout>>, r: Rect, users: &Arc<Mutex<Users>>) {
+    let users = users.lock().unwrap();
+    let warned_users = WARNED_USERS.lock().unwrap();
+    
+    // Hanya tampilkan jika ada guest yang diperingatkan
+    if !warned_users.is_empty() && !users.guests.is_empty() {
+        let mut warned_list: Vec<ListItem> = vec![];
+        warned_list.push(ListItem::new(Span::raw("")));
+        
+        for (username, warn_count) in warned_users.iter() {
+            // Hanya tampilkan jika username ada di daftar guest
+            if users.guests.iter().any(|(_, name)| name.to_lowercase() == username.to_lowercase()) {
+                let span = Span::styled(
+                    format!("Names : {} | Warns : {}", username, warn_count),
+                    Style::default().fg(tuiColor::Yellow)
+                );
+                warned_list.push(ListItem::new(span));
+            }
+        }
+        
+        if !warned_list.is_empty() {
+            let warned_widget = List::new(warned_list)
+                .block(Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Double)
+                    .title("Warned Users")
+                    .border_style(Style::default().fg(tuiColor::Red))
+                    .style(Style::default().bg(tuiColor::Black)));
+            let warned_area = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(60), Constraint::Percentage(20)].as_ref())
+                .split(r)[1];
+            f.render_widget(warned_widget, warned_area);
+        }
+    }
 }
 
 fn random_string(n: usize) -> String {
-    let s: Vec<u8> = thread_rng().sample_iter(&Alphanumeric).take(n).collect();
-    std::str::from_utf8(&s).unwrap().to_owned()
+    thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(n)
+        .map(char::from)
+        .collect()
 }
 
 #[derive(PartialEq)]
