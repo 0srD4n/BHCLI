@@ -2092,12 +2092,7 @@ fn toggle_bot_active(active: bool, tx: &crossbeam_channel::Sender<PostType>, fro
         eprintln!("Gagal mengirim pesan: {:?}", e);
     }
 
-    if active && {
-        let activation_message = format!(">> -- [color=#ffffff]Dantca still activated [/color] - [@{}] -- <", from);
-        if let Err(e) = tx.send(PostType::Post(activation_message, Some(SEND_TO_ALL.to_owned()))) {
-            eprintln!("Gagal mengirim pesan aktivasi: {:?}", e);
-        }
-    }
+ 
 }
 
 
@@ -2274,7 +2269,6 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
         ) 
     {
         warns = "CP is a ";
-        triggered = true;
         kicked = true;
     }
     if msgcopy.contains("rape ") && 
@@ -2351,7 +2345,6 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
         ) 
     {
         warns = "Racial Insults won't be tolerated.";
-        triggered = true;
         kicked = true;
     }             
     if msgcopy.contains("bomb") && 
@@ -3608,10 +3601,10 @@ use tui::widgets::BorderType;
                     .style(Style::default().bg(tuiColor::Black)));
             let warned_area = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(60), Constraint::Percentage(20)].as_ref())
-                .split(r)[1];
+                .constraints([Constraint::Percentage(0), Constraint::Percentage(100)].as_ref())
+                .split(r)[1];                                   
             f.render_widget(warned_widget, warned_area);
-        }
+        } 
     }
 }
 
