@@ -59,6 +59,8 @@ const SEND_TO_ALL: &str = "s *";
 const SEND_TO_MEMBERS: &str = "s ?";
 static mut BOT_ACTIVE: bool = false;
 static mut REMOVE_NAME: bool = false;
+static mut KICKED_COUNT: u32 = 0;
+static mut NEW_USER: String = String::new();
 
 // Fungsi untuk mengatur BOT_ACTIVE dan REMOVE_NAME
 
@@ -367,22 +369,16 @@ impl LeChatPHPClient {
         last_post_rx: crossbeam_channel::Receiver<()>,
     ) -> thread::JoinHandle<()> {
         let tx = self.tx.clone();
-        let send_to = self.config.keepalive_send_to.clone();
         thread::spawn(move || loop {
             let keep_msg = || {
-                let msg_keep = "[color=#ffffff]>>> H-E-L-L-O C-H-A-T-T-E-R-S W-E-L-C-O-M-E B-A-C-K TO BHC <<<[/color]
+                let kicked_count = unsafe { KICKED_COUNT };
+                let msg_keep = format!("[color=#ffffff]>>> H-E-L-L-O C-H-A-T-T-E-R-S W-E-L-C-O-M-E B-A-C-K TO BHC <<<[/color]
                 Keep it legal and enjoy your stay. 
                 You can try !-rules && !-help before. Please follow the !-rules
-                                       (Auto message)";
+                 [color=#00ff08]kicked users in the sesions chat -> {} <- [/color] (Auto message)", kicked_count);
                 tx.send(PostType::Post(msg_keep.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
-                thread::sleep(Duration::from_secs(180));
+                thread::sleep(Duration::from_secs(280));
                 tx.send(PostType::DeleteLast).unwrap();
-
-            };
-            let clb = || {
-                tx.send(PostType::Post("<keepalive>".to_owned(), Some(send_to.clone())))
-                    .unwrap();
-                    thread::sleep(Duration::from_secs(180));
             };
             let timeout = after(Duration::from_secs(60 * 75));
             select! {
@@ -393,7 +389,6 @@ impl LeChatPHPClient {
                 recv(&exit_rx) -> _ => return,
                 recv(&timeout) -> _ => { 
                     keep_msg(); 
-                    clb();
                 },
             }
         })
@@ -2001,7 +1996,7 @@ fn get_msgs(
     }
     {
         let mut users = users.lock().unwrap();
-        ban_imposters(tx, username, &users);
+        ban_imposters(tx, &users);
         *users = extract_users(&doc);
     }
     Ok(())
@@ -2030,14 +2025,11 @@ fn process_new_messages(
 
                 unsafe {
                     if BOT_ACTIVE {
-
                         let users_lock = users.lock().unwrap();
                         dantca_imps_proses(&from, &msg, tx, &users_lock);
                     }
                 }
-
-                let users_lock = users.lock().unwrap();
-                if from == XPLDAN || users_lock.members.iter().any(|(_color, member)| member.to_lowercase() == from.to_lowercase()) {
+                if !users.lock().unwrap().is_guest(&from) {
                     match msg.as_str() {
                         "dantcaoff!" => toggle_bot_active(false, tx, &from),
                         "dantcago!" => toggle_bot_active(true, tx, &from),
@@ -2045,34 +2037,65 @@ fn process_new_messages(
                         "dantcahelp!" => dantca_help(tx, &from),
                         _ => {}
                     }
-                }
-                if msg.to_lowercase().contains("reportdan!") {
-                    report_dantca(tx, &from);
-                }
+                }                        
+                // selamat_dantca_greet(tx, &from);
             }
         }
     }
 }
 
-    fn report_dantca(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
-        if from != XPLDAN {
-        let successful = format!("succesful for uninstall. reboot bhcli");
-        let report_message = format!("Dantca Uninstall in BHCLI ... THANKS FOR Using Dantca Bot.. @{}.", from);
-        tx.send(PostType::Post(report_message, Some(SEND_TO_ALL.to_owned()))).unwrap();
-        thread::sleep(Duration::from_secs(4));
-        tx.send(PostType::Post(successful, Some(SEND_TO_ALL.to_owned()))).unwrap();
-    }
+// Fungsi untuk menghitung jumlah kicked users dan mendapatkan username baru
+fn count_kicked_users(doc: &Document) -> (usize, Option<String>) {
+    let kicked_count = doc.find(Attr("class", "sysmsg"))
+        .filter(|node| node.text().contains("has been kicked."))
+        .count();
+
+    let new_user = doc.find(Attr("class", "sysmsg"))
+        .filter_map(|node| {
+            node.find(Name("span"))
+                .filter(|span| {
+                    span.next().map_or(false, |next| next.text().contains("entered the chat."))
+                })
+                .next()
+                .map(|span| span.text())
+        })
+        .next();
+
+    (kicked_count, new_user)
 }
+
+// Fungsi untuk menyapa pengguna baru yang memasuki chat
+// fn selamat_dantca_greet(tx: &crossbeam_channel::Sender<PostType>, new_user: &str) {
+//     // Komentar: Fungsi ini akan dipanggil ketika ada pengguna baru memasuki chat
+//     let message = format!("Dantca :  @{}! .", new_user);
+//     tx.send(PostType::Post(message, Some(SEND_TO_ALL.to_owned()))).unwrap();
+// }
+
+    // fn report_dantca(tx: &crossbeam_channel::Sender<PostType>, from: &str, client: &Client) -> Result<(), ExitSignal> {
+    //     if from != XPLDAN {
+    //         // Hapus semua pesan
+    //         if let Err(e) = tx.send(PostType::DeleteAll) {
+    //             eprintln!("Gagal menghapus semua pesan: {:?}", e);
+    //         }
+
+    //         // Tunggu sebentar untuk memastikan pesan terhapus
+    //         std::thread::sleep(std::time::Duration::from_secs(1));
+
+    //         // Lakukan logout
+    //         client.logout().unwrap();
+    //         return Err(ExitSignal::Terminate);
+    //     }
+    //     Ok(())
+    // }
 
 fn dantca_help(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
         let help_message = format!("
     Hallo @{}, there is guide for Dantca bot
-    dantcago-! = Active Dantca Bot
-    dantcaoff-! = Deactive Dantca Bot
-    statusdan-! = Check Dantca Bot Status
-    dantcahelp-! = Dantca Bot Help
-    reportdan-! = for report to Dantca bot
-    without ( - )", from);
+    dantcago! = Active Dantca Bot
+    dantcaoff! = Deactive Dantca Bot
+    statusdan! = Check Dantca Bot Status
+    dantcahelp! = Dantca Bot Help
+    reportdan! = for report to Dantca bot", from);
     tx.send(PostType::Post(help_message, Some(SEND_TO_MEMBERS.to_owned())
     )).unwrap();
 
@@ -2125,33 +2148,14 @@ fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<Post
         }
         
         if *count >= 2 {
-            tx.send(PostType::Kick(format!(">>> Dantca : Hallo  @{}, You have been warned multiple waarns | = {} = |times and are now being kicked. <<< ", username_to_kick, *count), username_to_kick.clone())).unwrap();
+            tx.send(PostType::Kick(format!(">>> Dantca : Hallo  @{}, You have been warned multiple waarns | = {} = |times and are now being kicked. BYE BYE !!  <<< ", username_to_kick, *count), username_to_kick.clone())).unwrap();
         }
         
         if kicked {
-            tx.send(PostType::Post(format!(">>> Dantca : Hallo @{}, -> your warnings: {} [BANNED TOPIC]-< BYE BYE !!  <<<", username_to_kick, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
+            tx.send(PostType::Post(format!(">>> Dantca : Hallo @{}, -> your warnings: {} [BANNED TOPIC]-< BYE! BYE!  <<<", username_to_kick, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
             tx.send(PostType::Kick(format!("Kicked by Dantca bot: {}", warns), username_to_kick.clone())).unwrap();
         }
-        // Menggunakan match untuk menangani berbagai kasus pesan
-        match msg_lower.as_str() {
-            m if m.contains("chat?") || m.contains("what about chat?") => 
-                tx.send(PostType::Post(format!("Halo, @{} !about", from), Some(SEND_TO_ALL.to_owned()))).unwrap(),
-            m if m.contains("bhcli") => 
-                tx.send(PostType::Post(format!("hallo, @{} -> {}", from, BHCLI_BLOG_URL), None)).unwrap(),
-            m if m.contains("i new here") || m.contains("im new here") => 
-                tx.send(PostType::Post(format!("[color=#ffffff]Hallo,@{} Welcome the Black Hat Chat You can try !-help and !-newmembers to more informations.-< [/color]", from), None)).unwrap(),
-            m if m.contains("learn programming") || m.contains("learn python") || m.contains("how can i start hacking") => 
-                tx.send(PostType::Post(format!("Halo @{} you can try !-learn!-ctf ~Dantca bot", from), Some(SEND_TO_ALL.to_owned()))).unwrap(),
-            m if m.contains("!-help") || m.contains("how to send @0?") || m.contains("list of commands") => 
-                tx.send(PostType::Post(format!("[color=#ffffff]Hello @{} This command can be sent to user @0 so as not to pollute the chat. To send a message to a user, click the '-All chatters-' box above the chat, and select user @0.[/color]", from), Some(SEND_TO_ALL.to_owned()))).unwrap(),
-            m if m.contains("red room") || m.contains("redroom") || m.contains("link red room") || m.contains("link redroom") => 
-                tx.send(PostType::Post(format!("Halo @{},!redroom", from), Some(SEND_TO_ALL.to_owned()))).unwrap(),
-            m if m.contains("pedo") || m.contains("hacking services") || m.contains("child porn") || m.contains("fuck all") || m.contains("fuck off") || m.contains("gore video") || m.contains("link gore") || m.contains("+62") || m.contains("nigger") || m.contains("stupid all") || m.contains("nigga") || m.contains("masturbate") || m.contains(" CP ") || m.contains("link cp") || m.contains("horny")  || m.contains("porn video") => 
-                tx.send(PostType::Kick(format!("!! dont break the rules you can try !-help or !-rules blacklist word '{}'  ~bot XplDan", m), username_to_kick)).unwrap(),
-            m if (m.contains("links") || m.contains("dark web link") || m.contains("link dark web")) && (m.contains("where ") || m.contains("want ") || m.contains("lookin") || m.contains("know ") || m.contains("have ") || m.contains("need ")) => 
-                tx.send(PostType::Post(format!("hallo @{} you can try !-links and send to @0", from), None)).unwrap(),
-            _ => {}
-        }
+    
     }
 }
 
@@ -2249,6 +2253,7 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
             || msgcopy.contains("know ")
             || msgcopy.contains("have ")
             || msgcopy.contains("need ")
+            || msgcopy.contains("how ")
         ) 
     {
         warns = "Social Media Hacking is bad form ";
@@ -2275,7 +2280,7 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
         ( 
             msgcopy.contains("where ")
             || msgcopy.contains("want ")
-            || msgcopy.contains("lookin") 
+            || msgcopy.contains("lookin ") 
             || msgcopy.contains("know ")
             || msgcopy.contains("have ")
             || msgcopy.contains("need ")
@@ -2285,12 +2290,9 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
         triggered = true;
     }
     if ( msgcopy.contains("loli") || msgcopy.contains("child") || msgcopy.contains("minor") ) && 
-        ( 
-            msgcopy.contains("content") || 
-            msgcopy.contains("porn")
-        ) &&
         (
             msgcopy.contains("where ")
+            || msgcopy.contains("link ")
             || msgcopy.contains("want ")
             || msgcopy.contains("lookin") 
             || msgcopy.contains("know ")
@@ -2299,7 +2301,7 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
         )
     {
         warns = "CSAM is a ";
-        triggered = true;
+        kicked = true;
     }
     if msgcopy.contains("sex") && msgcopy.contains("cam") {
         warns = "Sex Cams are poor taste";
@@ -2416,73 +2418,87 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
         warns = "Tabularis - not here! Be gone... BYE BYE...";
         kicked = true;
     }
-
+    // fuck logic
+    if (msgcopy.contains("fuck") || msgcopy.contains("fucking") || msgcopy.contains("fucks")) && 
+    (msgcopy.contains("all" )
+     || msgcopy.contains("everyone") 
+     || msgcopy.contains("everybody")
+      || msgcopy.contains("members") 
+      || msgcopy.contains("staff")
+       || msgcopy.contains("admin")){
+        warns = "dont used a bad word ~dantca bot";
+        kicked = true;
+    }
+    // satu kata  logic kicked
+    match msgcopy.as_str() {
+        "porn" | "child porn" | "cp" | "gore" | "fuck" | "carding" | "horny" | "bitch"=> {
+            // Pesan peringatan untuk konten yang tidak pantas
+            warns = "Bye Bye !!kicked by dantca bot";
+            kicked = true;
+        },
+        _ => {}
+    }
+    if msgcopy.len() > 1000 {
+        warns = "Message too long (over 1000 characters). if is the filter you can try send to @0 user";
+        triggered = true;
+    }
     (triggered, kicked, warns)
 }
-fn ban_imposters(tx: &crossbeam_channel::Sender<PostType>, account_username: &str, users: &Users) {
-    // Menggunakan unsafe block untuk mengakses BOT_ACTIVE
-    let bot_active = unsafe { BOT_ACTIVE };
-    let mut remove_name = unsafe { REMOVE_NAME };
-    if bot_active {
-        remove_name = true;
-    }
+fn ban_imposters(tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
+    let (bot_active, remove_name) = unsafe { (BOT_ACTIVE, REMOVE_NAME || BOT_ACTIVE) };
 
-    // Hanya jalankan fungsi jika bot aktif
-    if bot_active || remove_name {
-        // Hanya jalankan jika tidak ada admin atau staff (kecuali XPLDAN)
-        if !users.admin.is_empty() || (!users.staff.is_empty() && account_username != XPLDAN) {
-            return;
-        }
-
-        let banned_patterns = [
-            (Regex::new(r"(?i)n[o0]tr[1il][vy]").unwrap(), "n0tr1v"),
-            (Regex::new(r"(?i)h[i1]t[l1]er").unwrap(), "hitler"),
-            (Regex::new(r"(?i)h[i1]m+l[e3]r").unwrap(), "himmler"),
-            (Regex::new(r"(?i)m[e3]ng[e3]l[e3]").unwrap(), "mengele"),
-            (Regex::new(r"(?i)g[o0]b+[e3]ls").unwrap(), "goebbels"),
-            (Regex::new(r"(?i)h[e3]ydr[i1]ch").unwrap(), "heydrich"),
-            (Regex::new(r"(?i)gl[o0]b[o0]cn[i1l]k").unwrap(), "globocnik"),
-            (Regex::new(r"(?i)d[i1]rl[e3]wang[e3]r").unwrap(), "dirlewanger"),
-            (Regex::new(r"(?i)j[e3]ck[e3]ln").unwrap(), "jeckeln"),
-            (Regex::new(r"(?i)kram[e3]r").unwrap(), "kramer"),
-            (Regex::new(r"(?i)bl[o0]b[e3]l").unwrap(), "blobel"),
-            (Regex::new(r"(?i)stangl").unwrap(), "stangl"),
-            (Regex::new(r"(?i)\b(pedo|cp|danbyt|bigdick|bitch|kill|killer|dick|trolls|child\s*porn|hamas|pussy|cum|pedofile|fucked|lolita\s*slaves|fuck\s*all|fucking|bomb|fuckings)\b").unwrap(), "general blacklist"),
-        ];
-
-        let xpldan_patterns = Regex::new(r"(?i)\b(fuck|xpldan|nigg[iuaoe]|nig[iuao]|niqq|chink|wank|shit|cunt|bitch|booty|hooker|milf|rapist|balls|sex|cocaine|heroine|weed|drug|card|fisting|jerk|p3do|pedo|cplove|perv|gangbang|porn|dick|penis|puzzy|pussy|boceta|anal|cum|market|sell|fraud|DN37R34P3R|atomwaffen|altright)\b").unwrap();
-
-        for (_color, username) in &users.guests {
-            let lower_name = username.to_lowercase();
-
-            // Cek nama member
-            if users.members.iter().any(|(_, member)| {
-                member.len() >= 2 && lower_name.contains(&member.to_lowercase())
-            }) {
-                let msg = format!("Username members BHC '{}' is not allowed. ~ Dantca bot", username);
-                tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
-                continue;
-            }
-
-            // Cek pola yang dilarang
-            for (pattern, name) in &banned_patterns {
-                if pattern.is_match(&lower_name) {
-                    let msg = format!("Do not use names on the blacklist '{}' ({}). ~Dantca bot", lower_name, name);
-                    tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
-                    break;
-                }
-            }
-
-            // Cek pola tambahan untuk XPLDAN
-            if account_username == XPLDAN && xpldan_patterns.is_match(&lower_name) {
-                let msg = format!("Do not use names that are on the blacklist '{}' bot ~Dantca", lower_name);
-                tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
-            }
-        }
-    }else{
+    if !bot_active && !remove_name {
         return;
     }
-    // Jika bot tidak aktif, fungsi ini tidak akan melakukan apa-apa
+
+
+
+    let banned_patterns = [
+        (Regex::new(r"(?i)n[o0]tr[1il][vy]").unwrap(), "n0tr1v"),
+        (Regex::new(r"(?i)h[i1]t[l1]er").unwrap(), "hitler"),
+        (Regex::new(r"(?i)h[i1]m+l[e3]r").unwrap(), "himmler"),
+        (Regex::new(r"(?i)m[e3]ng[e3]l[e3]").unwrap(), "mengele"),
+        (Regex::new(r"(?i)g[o0]b+[e3]ls").unwrap(), "goebbels"),
+        (Regex::new(r"(?i)h[e3]ydr[i1]ch").unwrap(), "heydrich"),
+        (Regex::new(r"(?i)gl[o0]b[o0]cn[i1l]k").unwrap(), "globocnik"),
+        (Regex::new(r"(?i)d[i1]rl[e3]wang[e3]r").unwrap(), "dirlewanger"),
+        (Regex::new(r"(?i)j[e3]ck[e3]ln").unwrap(), "jeckeln"),
+        (Regex::new(r"(?i)kram[e3]r").unwrap(), "kramer"),
+        (Regex::new(r"(?i)bl[o0]b[e3]l").unwrap(), "blobel"),
+        (Regex::new(r"(?i)stangl").unwrap(), "stangl"),
+        (Regex::new(r"(?i)\b(pedo|cp|danbyt|bigdick|bitch|kill|killer|dick|trolls|child\s*porn|hamas|pussy|cum|pedofile|fucked|lolita\s*slaves|fuck\s*all|fucking|bomb|fuckings)\b").unwrap(), "general blacklist"),
+    ];
+
+    let xpldan_patterns = Regex::new(r"(?i)\b(fuck|xpldan|nigg[iuaoe]|nig[iuao]|niqq|chink|wank|shit|cunt|bitch|booty|hooker|milf|rapist|balls|sex|childporn|cocaine|heroine|weed|drug|card|fisting|jerk|p3do|pedo|cplove|perv|gangbang|porn|dick|penis|puzzy|pussy|boceta|anal|cum|market|sell|fraud|DN37R34P3R|atomwaffen|altright)\b").unwrap();
+
+    let kicked_words = ["dick", "penis", "bitch", "fuck", "fucking", "cock"];
+
+    for (_color, username) in &users.guests {
+        let lower_name = username.to_lowercase();
+
+        if users.members.iter().any(|(_, member)| member.len() >= 2 && lower_name.contains(&member.to_lowercase())) {
+            let msg = format!("Username members BHC '{}' is not allowed. dont to be imposter LOL ~ Dantca bot", username);
+            tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
+            continue;
+        }
+
+        if banned_patterns.iter().any(|(pattern, _)| pattern.is_match(&lower_name)) {
+            let msg = format!("Do not use names on the blacklist '{}' . ~Dantca bot", lower_name);
+            tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
+            continue;
+        }
+
+        if kicked_words.iter().any(|&word| lower_name.contains(word)) || xpldan_patterns.is_match(&lower_name) {
+            let msg = format!("Do not use names on the blacklist '{}'. ~Dantca bot", lower_name);
+            tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
+
+            // cek kata kata
+        }
+        if lower_name == XPLDAN {
+            let msg = format!("Dont to be me LOL, Dantca can See You lol.. ~dantca Bot.. dont used again = {} = ",lower_name);
+            tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
+        }
+    }
 }
 
 fn update_messages(
@@ -2532,8 +2548,9 @@ fn update_messages(
             old_msg_ptr += 1;
             break;
         }
+
     }
-    messages.truncate(1000);
+    messages.truncate(5000);
 }
 
 fn delete_message(
@@ -3204,9 +3221,9 @@ impl Users {
         out
     }
 
-    // fn is_guest(&self, name: &str) -> bool {
-    //     self.guests.iter().find(|(_, username)| username == name).is_some()
-    // }
+    fn is_guest(&self, name: &str) -> bool {
+        self.guests.iter().find(|(_, username)| username == name).is_some()
+    }
 }
 
 fn extract_users(doc: &Document) -> Users {
@@ -3255,6 +3272,11 @@ fn remove_prefix<'a>(s: &'a str, prefix: &str) -> &'a str {
 }
 
 fn extract_messages(doc: &Document) -> anyhow::Result<Vec<Message>> {
+    unsafe {
+        let (kicked_count, new_user) = count_kicked_users(doc);
+        KICKED_COUNT = kicked_count as u32;
+        NEW_USER = new_user.unwrap_or_default();
+    }
     Ok(doc.find(Attr("id", "messages"))
         .next()
         .ok_or_else(|| anyhow!("Gagal mendapatkan div pesan"))?
@@ -3270,10 +3292,14 @@ fn extract_messages(doc: &Document) -> anyhow::Result<Vec<Message>> {
                 _ => return None,
             };
             let (text, upload_link) = process_node(msg_span, tuiColor::White);
-            Some(Message::new(id, typ, date, upload_link, text))
+            let message = Message::new(id, typ, date, upload_link, text);
+        
+            
+            Some(message)
         })
         .collect())
 }
+
 
 fn draw_terminal_frame(
     f: &mut Frame<CrosstermBackend<io::Stdout>>,
@@ -3571,40 +3597,56 @@ fn render_users(f: &mut Frame<CrosstermBackend<io::Stdout>>, r: Rect, users: &Ar
 }
 use tui::widgets::BorderType;
 // Komentar: Fungsi render_warned_users diubah agar dapat digunakan
- fn render_warned_users(f: &mut Frame<CrosstermBackend<io::Stdout>>, r: Rect, users: &Arc<Mutex<Users>>) {
+fn render_warned_users(f: &mut Frame<CrosstermBackend<io::Stdout>>, r: Rect, users: &Arc<Mutex<Users>>) {
     let users = users.lock().unwrap();
-    let warned_users = WARNED_USERS.lock().unwrap();
+    let mut warned_users = WARNED_USERS.lock().unwrap();
     
-    // Hanya tampilkan jika ada guest yang diperingatkan
-    if !warned_users.is_empty() && !users.guests.is_empty() {
-        let mut warned_list: Vec<ListItem> = vec![];
-        warned_list.push(ListItem::new(Span::raw("")));
-        
-        for (username, warn_count) in warned_users.iter() {
-            // Hanya tampilkan jika username ada di daftar guest
-            if users.guests.iter().any(|(_, name)| name.to_lowercase() == username.to_lowercase()) {
-                let span = Span::styled(
-                    format!("Names : {} | Warns : {}", username, warn_count),
-                    Style::default().fg(tuiColor::Yellow)
-                );
-                warned_list.push(ListItem::new(span));
-            }
-        }
-        
+    // Filter warned_users to only keep those who are still guests
+    warned_users.retain(|username, _| users.guests.iter().any(|(_, name)| name.to_lowercase() == username.to_lowercase()));
+
+    // Sort warned users by the most warnings
+    let mut sorted_warned_users: Vec<_> = warned_users.iter().collect();
+    sorted_warned_users.sort_by(|a, b| b.1.cmp(a.1));
+
+    // Remove users with 2 warnings or more
+    sorted_warned_users.retain(|(_, &warn_count)| warn_count < 2);
+
+    // Split the warned users into multiple columns if needed
+    let columns_count = std::cmp::max(1, (sorted_warned_users.len() + 2) / 3); // Ensure at least 1 column
+let column_width =100 / columns_count as u16; // Determine the width of each column as a percentage
+ // Determine the width of each column as a percentage
+    let mut constraints = Vec::new();
+    for _ in 0..columns_count {
+        constraints.push(Constraint::Percentage(column_width));
+    }
+    let column_areas = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(&constraints[..]) // Use the slice here
+        .split(r);
+
+    // Populate each column with warned users
+    let mut warned_lists: Vec<Vec<ListItem>> = vec![Vec::new(); columns_count];
+    for (index, (username, warn_count)) in sorted_warned_users.into_iter().enumerate() {
+        let span = Span::styled(
+            format!("Names: {} | Warns: {}", username, warn_count),
+            Style::default().fg(tuiColor::Yellow)
+        );
+        warned_lists[index / 3].push(ListItem::new(span));
+    }
+
+    // Render each column
+    for (i, warned_list) in warned_lists.into_iter().enumerate() {
         if !warned_list.is_empty() {
             let warned_widget = List::new(warned_list)
                 .block(Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Double)
-                    .title("Warned Users")
-                    .border_style(Style::default().fg(tuiColor::Red))
-                    .style(Style::default().bg(tuiColor::Black)));
-            let warned_area = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(0), Constraint::Percentage(100)].as_ref())
-                .split(r)[1];                                   
-            f.render_widget(warned_widget, warned_area);
-        } 
+                    .title(format!("Warned Users {}", i + 1))
+                    .border_style(Style::default().fg(tuiColor::White))
+                    .style(Style::default().bg(tuiColor::Black))
+                );
+            f.render_widget(warned_widget, column_areas[i]);
+        }
     }
 }
 
