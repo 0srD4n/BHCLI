@@ -1913,10 +1913,7 @@ fn notify_members(tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
      let current_staff: Vec<String> = users.staff.iter().map(|(_, name)| name.clone()).collect();
      // just guest lol
     
-     unsafe {
-        // you can try methode diffrent dont used manyu nsafe        
-        if let Some(prev_staff) = addr_of!(PREVIOUS_STAFF).as_ref().unwrap().as_ref() {
-            for staff in &current_staff {
+     
                 
                 let local_count_guests = users.guests.len();
                 let local_count_members = users.members.len();

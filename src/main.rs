@@ -59,8 +59,8 @@ const SEND_TO_ALL: &str = "s *";
 const SEND_TO_MEMBERS: &str = "s ?";
 static mut BOT_ACTIVE: bool = false;
 static mut REMOVE_NAME: bool = false;
-static mut KICKED_COUNT: u32 = 0;
-static mut NEW_USER: String = String::new();
+// Jumlah pengguna yang telah di-kick
+static mut KICKED_COUNT: usize = 0;
 
 // Fungsi untuk mengatur BOT_ACTIVE dan REMOVE_NAME
 
@@ -80,7 +80,7 @@ const CAPTCHA_WG_ERR: &str = "Wrong Captcha";
 const CAPTCHA_USED_ERR: &str = "Captcha already used or timed out";
 const UNKNOWN_ERR: &str = "Unknown error";
 const DNMX_URL: &str = "http://hxuzjtocnzvv5g2rtg2bhwkcbupmk7rclb6lly3fo4tvqkk5oyrv3nid.onion";
-const BHCLI_BLOG_URL: &str = "sss";
+// const BHCLI_BLOG_URL: &str = "sss";
 
 
 lazy_static! {
@@ -298,7 +298,7 @@ impl LeChatPHPClient {
         // Gunakan dialog native untuk memilih file
         if let Some(file_path) = rfd::FileDialog::new().pick_file() {
             // Buka terminal baru untuk input menggunakan xterm
-            let output = std::process::Command::new("xterm")
+            let output = match std::process::Command::new("xterm")
                 .arg("-e")
                 .arg("bash")
                 .arg("-c")
@@ -324,16 +324,31 @@ impl LeChatPHPClient {
                     "#,
                     file_path.display()
                 ))
-                .output();
+                .output() {
+                Ok(output) => output,
+                Err(e) => {
+                    log::error!("Gagal membuka xterm: {:?}", e);
+                    println!("Error: Gagal membuka xterm untuk input.");
+                    return;
+                }
+            };
 
-            if let Err(e) = output {
-                log::error!("Gagal membuka xterm: {:?}", e);
-                println!("Error: Gagal membuka xterm untuk input.");
+            if !output.status.success() {
+                log::error!("Xterm command failed: {:?}", output.stderr);
+                println!("Error: Gagal menjalankan perintah xterm.");
                 return;
             }
 
             // Baca hasil input dari file temporary
-            let upload_info = std::fs::read_to_string("/tmp/upload_info").unwrap_or_default();
+            let upload_info = match std::fs::read_to_string("/tmp/upload_info") {
+                Ok(info) => info,
+                Err(e) => {
+                    log::error!("Gagal membaca file upload_info: {:?}", e);
+                    println!("Error: Gagal membaca informasi unggahan.");
+                    return;
+                }
+            };
+
             let mut parts = upload_info.trim().split('|');
             let send_to = parts.next().unwrap_or("").to_string();
             let msg = parts.next().unwrap_or("").to_string();
@@ -347,7 +362,7 @@ impl LeChatPHPClient {
             }.to_owned();
 
             // Kirim permintaan unggah
-            if let Err(e) = self.post_msg(PostType::Upload(file_path.to_str().unwrap().to_string(), send_to, msg)) {
+            if let Err(e) = self.post_msg(PostType::Upload(file_path.to_str().unwrap_or("").to_string(), send_to, msg)) {
                 log::error!("Gagal mengirim permintaan unggah: {:?}", e);
                 println!("Error: Gagal mengirim permintaan unggah: {:?}", e);
             } else {
@@ -355,9 +370,11 @@ impl LeChatPHPClient {
             }
 
             // Hapus file temporary
-            let _ = std::fs::remove_file("/tmp/upload_info");
+            if let Err(e) = std::fs::remove_file("/tmp/upload_info") {
+                log::warn!("Gagal menghapus file temporary: {:?}", e);
+            }
         } else {
-            println!("Error: Tidak ada file yang dipilih.");
+            println!("Info: Tidak ada file yang dipilih.");
         }
     }
 
@@ -1988,6 +2005,7 @@ fn get_msgs(
         let messages = messages.lock().unwrap();
         process_new_messages(&new_messages, &messages, datetime_fmt, members_tag, username, should_notify, tx, users);
         // Membangun vektor pesan. Menandai pesan yang dihapus.
+        count_kicked_users(&doc);
         update_messages(new_messages, messages, datetime_fmt);
         // Memberi tahu bahwa pesan baru telah tiba.
         // Ini memastikan bahwa kita menggambar ulang pesan di layar segera.
@@ -2027,6 +2045,7 @@ fn process_new_messages(
                     if BOT_ACTIVE {
                         let users_lock = users.lock().unwrap();
                         dantca_imps_proses(&from, &msg, tx, &users_lock);
+                        send_greeting(&tx,&users_lock);
                     }
                 }
                 if !users.lock().unwrap().is_guest(&from) {
@@ -2043,26 +2062,44 @@ fn process_new_messages(
         }
     }
 }
+// fn initialize_and_greet_users(tx: crossbeam_channel::Sender<PostType>, users: Arc<Mutex<Users>>) {
+//     // Simpan data pengguna awal
+//     let initial_users = Arc::new(Mutex::new(HashMap::new()));
+//     {
+//         let users_lock = users.lock().unwrap();
+//         let mut initial_users_lock = initial_users.lock().unwrap();
+//         for (_, username) in users_lock.admin.iter().chain(users_lock.staff.iter()).chain(users_lock.members.iter()) {
+//             initial_users_lock.insert(username.clone(), "admin_staff_member");
+//         }
+//     }
+
+//     // Fungsi untuk memeriksa pengguna baru dan menyapa mereka
+//     let check_and_greet_new_users = move |users: &Users| {
+//         let mut initial_users_lock = initial_users.lock().unwrap();
+//         for (_, username) in users.admin.iter().chain(users.staff.iter()).chain(users.members.iter()) {
+//             if !initial_users_lock.contains_key(username) {
+//                 // Pengguna baru ditemukan, kirim salam
+//                 let greeting = format!("Selamat datang, @{}! Semoga harimu menyenangkan.", username);
+//                 tx.send(PostType::Post(greeting, Some(SEND_TO_ALL.to_owned()))).unwrap();
+                
+//                 // Tambahkan pengguna baru ke daftar awal
+//                 initial_users_lock.insert(username.clone(), "admin_staff_member");
+//             }
+//         }
+//     };
+
+//     // Jalankan pemeriksaan pengguna baru secara berkala
+//     thread::spawn(move || {
+//         loop {
+//             thread::sleep(Duration::from_secs(5)); // Periksa setiap 5 detik
+//             if let Ok(users_lock) = users.lock() {
+//                 check_and_greet_new_users(&users_lock);
+//             }
+//         }
+//     });
+// }
 
 // Fungsi untuk menghitung jumlah kicked users dan mendapatkan username baru
-fn count_kicked_users(doc: &Document) -> (usize, Option<String>) {
-    let kicked_count = doc.find(Attr("class", "sysmsg"))
-        .filter(|node| node.text().contains("has been kicked."))
-        .count();
-
-    let new_user = doc.find(Attr("class", "sysmsg"))
-        .filter_map(|node| {
-            node.find(Name("span"))
-                .filter(|span| {
-                    span.next().map_or(false, |next| next.text().contains("entered the chat."))
-                })
-                .next()
-                .map(|span| span.text())
-        })
-        .next();
-
-    (kicked_count, new_user)
-}
 
 // Fungsi untuk menyapa pengguna baru yang memasuki chat
 // fn selamat_dantca_greet(tx: &crossbeam_channel::Sender<PostType>, new_user: &str) {
@@ -3263,6 +3300,7 @@ fn extract_users(doc: &Document) -> Users {
     users
 }
 
+
 fn remove_suffix<'a>(s: &'a str, suffix: &str) -> &'a str {
     s.strip_suffix(suffix).unwrap_or(s)
 }
@@ -3273,9 +3311,9 @@ fn remove_prefix<'a>(s: &'a str, prefix: &str) -> &'a str {
 
 fn extract_messages(doc: &Document) -> anyhow::Result<Vec<Message>> {
     unsafe {
-        let (kicked_count, new_user) = count_kicked_users(doc);
-        KICKED_COUNT = kicked_count as u32;
-        NEW_USER = new_user.unwrap_or_default();
+        let (kicked_count, new_username) = count_kicked_users(doc);
+        KICKED_COUNT = kicked_count as usize;
+        NEW_USER = new_username;
     }
     Ok(doc.find(Attr("id", "messages"))
         .next()
@@ -3300,6 +3338,78 @@ fn extract_messages(doc: &Document) -> anyhow::Result<Vec<Message>> {
         .collect())
 }
 
+// Fungsi untuk mengirim pesan sambutan kepada pengguna baru
+// Fungsi untuk mengirim pesan sambutan kepada pengguna baru
+// Fungsi untuk mengekstrak pengguna baru dan mengirim pesan sambutan
+
+// Fungsi untuk menghitung jumlah pengguna yang di-kick
+// Variabel global untuk menyimpan nama pengguna baru
+static mut NEW_USER: Option<String> = None;
+fn count_kicked_users(doc: &Document) -> (usize, Option<String>) {
+    let kicked_count = doc.find(Attr("id", "messages"))
+        .next()
+        .map(|messages| {
+            messages.find(Attr("class", "msg"))
+                .filter(|node| node.text().contains("has been kicked."))
+                .count()
+        })
+        .unwrap_or(0);
+    let new_username = doc.find(Attr("id", "messages"))
+        .next()
+        .and_then(|messages| {
+            messages.find(Attr("class", "msg"))
+                .filter(|node| node.text().contains("has joined the chat."))
+                .last()
+                .and_then(|node| {
+                    let text = node.text();
+                    let parts: Vec<&str> = text.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        Some(parts[0].to_string())
+                    } else {
+                        None
+                    }
+                })
+        });
+    (kicked_count, new_username)
+}
+
+// Fungsi untuk mengirim salam
+fn send_greeting(tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
+    let current_members: Vec<String> = users.members.iter().map(|(_, name)| name.clone()).collect();
+    let current_staff: Vec<String> = users.staff.iter().map(|(_, name)| name.clone()).collect();
+    // just guest lol
+    unsafe {
+        // Kamu bisa mencoba metode berbeda tanpa menggunakan banyak unsafe
+        static mut PREVIOUS_STAFF: Option<Vec<String>> = None;
+        static mut PREVIOUS_MEMBERS: Option<Vec<String>> = None;
+        
+        if let Some(prev_staff) = PREVIOUS_STAFF.as_ref() {
+            for staff in &current_staff {
+                if !prev_staff.contains(staff) {
+                    let welcome_msg = format!(
+                        "Dantca -> Welcome back, @{}! (auto-message) do not reply count kicked in the session chat is: {} ", staff, KICKED_COUNT);
+                    tx.send(PostType::Post(welcome_msg, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
+                }
+            }
+        }
+        PREVIOUS_STAFF = Some(current_staff);
+        
+        if let Some(prev_members) = PREVIOUS_MEMBERS.as_ref() {
+            for member in &current_members {
+                if !prev_members.contains(member) {
+                    let welcome_msg = format!(
+                        "Dantca -> Welcome back, @{}! (auto-message) do not reply count kicked in the session chat is: {}", member, KICKED_COUNT);
+                    tx.send(PostType::Post(welcome_msg, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
+                    
+                    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+                    let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();                            
+                    stream_handle.play_raw(source.convert_samples()).unwrap();                     
+                }
+            }
+        }        
+        PREVIOUS_MEMBERS = Some(current_members);
+    }
+}
 
 fn draw_terminal_frame(
     f: &mut Frame<CrosstermBackend<io::Stdout>>,
@@ -3355,36 +3465,30 @@ fn gen_lines(msg_txt: &StyledText, w: usize, line_prefix: &str) -> Vec<Vec<(tuiC
     let txt = msg_txt.text();
     let wrapped = textwrap::fill(&txt, w);
     let splits: Vec<&str> = wrapped.split('\n').collect();
-    let mut new_lines: Vec<Vec<(tuiColor, String)>> = Vec::new();
-    let mut ctxt = msg_txt.colored_text();
-    ctxt.reverse();
+    let mut new_lines = Vec::new();
+    let mut ctxt = msg_txt.colored_text().into_iter().rev().collect::<Vec<_>>();
     let mut ptr = 0;
     let mut split_idx = 0;
-    let mut line: Vec<(tuiColor, String)> = Vec::new();
+    let mut line = Vec::new();
     let mut first_in_line = true;
 
-    while let Some((color, mut txt)) = ctxt.pop() {
-        txt = txt.replace('\n', "");
+    while let Some((color, txt)) = ctxt.pop() {
+        let txt = txt.replace('\n', "");
         if let Some(split) = splits.get(split_idx) {
-            if let Some(chr) = txt.chars().next() {
-                if chr == ' ' && first_in_line {
-                    txt = txt.chars().skip(1).collect();
-                }
-            }
-
+            let txt = if first_in_line { txt.trim_start() } else { &txt };
             let remain = split.len().saturating_sub(ptr);
+
             if txt.len() <= remain {
                 ptr += txt.len();
-                line.push((color, txt));
+                line.push((color, txt.to_string()));
                 first_in_line = false;
             } else {
                 if remain > 0 {
-                    line.push((color, txt[..remain].to_owned()));
+                    line.push((color, txt[..remain].to_string()));
                 }
-                new_lines.push(line);
-                line = vec![(tuiColor::White, line_prefix.to_owned())];
+                new_lines.push(std::mem::replace(&mut line, vec![(tuiColor::White, line_prefix.to_string())]));
                 if remain < txt.len() {
-                    ctxt.push((color, txt[remain..].to_owned()));
+                    ctxt.push((color, txt[remain..].to_string()));
                 }
                 ptr = 0;
                 split_idx += 1;
