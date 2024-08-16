@@ -84,6 +84,7 @@ const DNMX_URL: &str = "http://hxuzjtocnzvv5g2rtg2bhwkcbupmk7rclb6lly3fo4tvqkk5o
 
 
 lazy_static! {
+    static ref KICKED_USERS: Arc<Mutex<Vec<KickedUser>>> = Arc::new(Mutex::new(Vec::new()));
     static ref WARNED_USERS: Mutex<HashMap<String, u32>> = Mutex::new(HashMap::new());
     static ref META_REFRESH_RGX: Regex = Regex::new(r#"url='([^']+)'"#).unwrap();
     static ref SESSION_RGX: Regex = Regex::new(r#"session=([^&]+)"#).unwrap();
@@ -2054,6 +2055,7 @@ fn process_new_messages(
                         "dantcago!" => toggle_bot_active(true, tx, &from),
                         "statusdan!" => check_bot_status(tx, &from),
                         "dantcahelp!" => dantca_help(tx, &from),
+                        "reportdan!" => report_dantca(tx, &from),
                         _ => {}
                     }
                 }                        
@@ -2108,22 +2110,37 @@ fn process_new_messages(
 //     tx.send(PostType::Post(message, Some(SEND_TO_ALL.to_owned()))).unwrap();
 // }
 
-    // fn report_dantca(tx: &crossbeam_channel::Sender<PostType>, from: &str, client: &Client) -> Result<(), ExitSignal> {
-    //     if from != XPLDAN {
-    //         // Hapus semua pesan
-    //         if let Err(e) = tx.send(PostType::DeleteAll) {
-    //             eprintln!("Gagal menghapus semua pesan: {:?}", e);
-    //         }
+// loot data anjing sulit bet dah
+    struct KickedUser {
+        name: String,
+        violation: String,
+    }
 
-    //         // Tunggu sebentar untuk memastikan pesan terhapus
-    //         std::thread::sleep(std::time::Duration::from_secs(1));
+// fungsi untuk melakukan kicked user di processe message
+    fn report_dantca(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
+        let kicked_users = KICKED_USERS.lock().unwrap();
+        // masukan aku mas
+        if kicked_users.is_empty() 
+        // kalok kosong kirim pesan ini yah mas
+        { 
+            let message = format!("Hallo , @{}, not found kicked user form dantca bot", from);
+            tx.send(PostType::Post(message, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
+            return;
+        }
+// buat pesan ini agar dapat panjang
+        let mut report = String::from("List User Kicked:\n");
+        for (index, user) in kicked_users.iter().enumerate() {
+            report.push_str(&format!("{}. -> {} -> break rules: {}\n", index + 1, user.name, user.violation));
+        }
 
-    //         // Lakukan logout
-    //         client.logout().unwrap();
-    //         return Err(ExitSignal::Terminate);
-    //     }
-    //     Ok(())
-    // }
+        let message = format!("Hallo , @{}, there we go for report kicked users:\n{}", from, report);
+        tx.send(PostType::Post(message, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
+    }
+// buat fub untuk fungsi ini agar bisa di panggil di proses message
+    pub fn add_kicked_user(name: String, violation: String) {
+        let mut kicked_users = KICKED_USERS.lock().unwrap();
+        kicked_users.push(KickedUser { name, violation });
+    }
 
 fn dantca_help(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
         let help_message = format!("
@@ -2132,7 +2149,7 @@ fn dantca_help(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
     dantcaoff! = Deactive Dantca Bot
     statusdan! = Check Dantca Bot Status
     dantcahelp! = Dantca Bot Help
-    reportdan! = for report to Dantca bot", from);
+    reportdan! = for report kicked user", from);
     tx.send(PostType::Post(help_message, Some(SEND_TO_MEMBERS.to_owned())
     )).unwrap();
 
@@ -2168,7 +2185,6 @@ fn check_bot_status(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
 }
 
 fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
-
     let msg_lower = msg.to_lowercase();
     let from_lower = from.to_lowercase();
     
@@ -2185,14 +2201,15 @@ fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<Post
         }
         
         if *count >= 2 {
-            tx.send(PostType::Kick(format!(">>> Dantca : Hallo  @{}, You have been warned multiple waarns | = {} = |times and are now being kicked. BYE BYE !!  <<< ", username_to_kick, *count), username_to_kick.clone())).unwrap();
+            tx.send(PostType::Kick(format!(">>> Dantca : Hallo  @{}, You have been warned multiple warns | = {} = |times and are now being kicked. BYE BYE !!  <<< ", username_to_kick, *count), username_to_kick.clone())).unwrap();
+            add_kicked_user(username_to_kick.clone(), format!("Multiple warnings: {}", warns));
         }
         
         if kicked {
             tx.send(PostType::Post(format!(">>> Dantca : Hallo @{}, -> your warnings: {} [BANNED TOPIC]-< BYE! BYE!  <<<", username_to_kick, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
             tx.send(PostType::Kick(format!("Kicked by Dantca bot: {}", warns), username_to_kick.clone())).unwrap();
+            add_kicked_user(username_to_kick.clone(), warns.to_string());
         }
-    
     }
 }
 
@@ -2244,7 +2261,9 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
     if msgcopy.contains("porn") && 
         (
             msgcopy.contains("where ")
+            || msgcopy.contains("link ")
             || msgcopy.contains("want ")
+            || msgcopy.contains("favorite ")
             || msgcopy.contains("lookin ") 
             || msgcopy.contains("know ")
             || msgcopy.contains("have ")
@@ -2373,7 +2392,7 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
         kicked = true;
     }        
     if msgcopy.contains("nogg") || msgcopy.contains("niqq") || msgcopy.contains("nigg") || msgcopy.contains("nigga") || msgcopy.contains("nigge") || msgcopy.contains("niggo") || msgcopy.contains("niggi") || msgcopy.contains("niggu")  {
-        warns = "Offensive terms are bad form. SORRY..";
+        warns = "Offensive terms are bad form.";
         kicked = true;
     }
     if msgcopy.contains("indian") &&
@@ -2409,7 +2428,7 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
             || msgcopy.contains("need ")
         ) 
     {
-        warns = "Databases are not us. Be gone...LOL!!";
+        warns = "Databases are not us. Be gone.";
         kicked = true;
     }
     if msgcopy.contains("paypal") && msgcopy.contains("transfer") && 
@@ -2422,7 +2441,7 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
             || msgcopy.contains("need ")
         ) 
     {
-        warns = "Paypal - not here PAL! Be gone....";
+        warns = "Paypal - not here PAL! Be gone.";
         kicked = true;
     }
     if msgcopy.to_lowercase().contains("cc ") && 
