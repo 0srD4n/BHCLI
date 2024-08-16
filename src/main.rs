@@ -1031,8 +1031,7 @@ impl LeChatPHPClient {
                 REMOVE_NAME = true;
             }
             // Pesan ketika bot diaktifkan
-            ">>> [color=#ffffff]Dantca patch update on system >> ..... configuration successful.. not error report > - < actived with panel control[/color] <<< |3 min removed |"
-           
+            ">>> [color=#ffffff]Dantca bot patch update on system by @Xpldan >> .. configuration successful.. not error report > - < actived with panel control[/color] <<< |3 min removed |"
         } else {
             unsafe {
                 REMOVE_NAME = false;
@@ -1042,18 +1041,20 @@ impl LeChatPHPClient {
         };
 
         // Kirim pesan
-        if let Err(e) = self.tx.send(PostType::Post(msg_actived_bot.to_owned(), Some(SEND_TO_ALL.to_owned()))) {
-            eprintln!("Gagal mengirim pesan: {:?}", e);
-        }
+        let _ = self.tx.send(PostType::Post(msg_actived_bot.to_owned(), Some(SEND_TO_ALL.to_owned())));
+        
+        // Hapus pesan setelah 3 menit
+        let tx_clone = self.tx.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(100));
+            let _ = tx_clone.send(PostType::DeleteLast);
+        });
         
         // Kirim file saat bot diaktifkan
         if bot_active {
             let file_name = "1564478315_1337 2.0.gif".to_string();
             let message = "Dantca Actived HAHAHA".to_string();
-            match self.tx.send(PostType::Upload(file_name, SEND_TO_ALL.to_owned(), message)) {
-                Ok(_) => {},
-                Err(e) => eprintln!("Gagal mengirim file: {:?}", e),
-            }
+            let _ = self.tx.send(PostType::Upload(file_name, SEND_TO_ALL.to_owned(), message));
         }
     }
 fn handle_remove_name(&mut self, _app: &mut App) {
@@ -2187,7 +2188,10 @@ fn check_bot_status(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
 fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
     let msg_lower = msg.to_lowercase();
     let from_lower = from.to_lowercase();
-    
+    // filer untuk membantu gusest dalam hal apapun
+
+
+
     if let Some((_color, _username)) = users.guests.iter().find(|(_color, name)| name.to_lowercase() == from_lower) {
         let username_to_kick = from_lower.clone();
         let (triggered, kicked, warns) = check_message_content(&msg_lower);
@@ -2198,18 +2202,46 @@ fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<Post
         if triggered {
             *count += 1;
             tx.send(PostType::Post(format!(">>> Dantca :  Hallo @{}, ->  [color=#ffffff]you have warns : [/color] [color=#00FF00]| {}/2 |[/color] -> Your Warnings :  {} [BANNED TOPIC]-< [LAST WARNS] <<<", username_to_kick, *count, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
+            let tx_clone = tx.clone(); 
+            thread::spawn(move || {
+                thread::sleep(Duration::from_secs(210));
+                tx_clone.send(PostType::DeleteLast).unwrap();
+            });
         }
         
         if *count >= 2 {
             tx.send(PostType::Kick(format!(">>> Dantca : Hallo  @{}, You have been warned multiple warns | = {} = |times and are now being kicked. BYE BYE !!  <<< ", username_to_kick, *count), username_to_kick.clone())).unwrap();
             add_kicked_user(username_to_kick.clone(), format!("Multiple warnings: {}", warns));
+            let tx_clone = tx.clone(); 
+            thread::spawn(move || {
+                thread::sleep(Duration::from_secs(210));
+                tx_clone.send(PostType::DeleteLast).unwrap();
+            });
         }
         
         if kicked {
             tx.send(PostType::Post(format!(">>> Dantca : Hallo @{}, -> your warnings: {} [BANNED TOPIC]-< BYE! BYE!  <<<", username_to_kick, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
             tx.send(PostType::Kick(format!("Kicked by Dantca bot: {}", warns), username_to_kick.clone())).unwrap();
             add_kicked_user(username_to_kick.clone(), warns.to_string());
+            let tx_clone = tx.clone();r
+            thread::spawn(move || {
+                thread::sleep(Duration::from_secs(210));
+                tx_clone.send(PostType::DeleteLast).unwrap();
+            });
         }
+        if msg_lower.contains("link ") &&
+        (
+        || msg_lower.contains("want ") 
+        || msg_lower.contains("need ") 
+        || msg_lower.contains("have ")
+        || msg_lower.contains("how ")
+        || msg_lower.contains("lookin ")
+        || msg_lower.contains("? ")
+    ) {
+        tx.send(PostType::Post(format!("Hallo @{}, You can Try the command !-link !-sites to get a link. and send to @0 ",from)))
+    } 
+    if msg_lower.contains("@0 ") && (msg_lower.contains("how ") || msg_lower.contains("whare ") || msg_lower.contains("who ")) {
+        tx.send(PostType::Post(format!("Hallo @{}, to send to message to @0 you can click the button all-chatters and select @0 send your command to him ",from)))
     }
 }
 
@@ -2231,21 +2263,7 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
     {
         warns = "Betting is frowned upon here";
         triggered = true;
-    }
-    if (msgcopy.contains("buy") || msgcopy.contains("sell ")) && ((msgcopy.contains("credit") && msgcopy.contains("card ")) || msgcopy.contains("cc ")) &&
-        (
-            msgcopy.contains("where ")
-            || msgcopy.contains("want ")
-            || msgcopy.contains("lookin") 
-            || msgcopy.contains("know ")
-            || msgcopy.contains("have ")
-            || msgcopy.contains("need ")
-        ) 
-    {
-        warns = "Credit Carding is a";
-        triggered = true;
-    }
-    if (msgcopy.contains("buy ") || msgcopy.contains("sell ")) && msgcopy.contains("gun") && 
+    } if (msgcopy.contains("buy ") || msgcopy.contains("sell ")) && msgcopy.contains("gun") && 
         (
             msgcopy.contains("where ")
             || msgcopy.contains("want ")
@@ -2444,7 +2462,7 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
         warns = "Paypal - not here PAL! Be gone.";
         kicked = true;
     }
-    if msgcopy.to_lowercase().contains("cc ") && 
+    if (msgcopy.contains("cc ") || msgcopy.contains("buy") || msgcopy.contains("sell ") || msgcopy.contains("credit ") || msgcopy.contains("card ")) && 
         (
             msgcopy.contains("make") || 
             msgcopy.contains("dump") ||
