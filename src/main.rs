@@ -374,12 +374,9 @@ impl LeChatPHPClient {
             if let Err(e) = std::fs::remove_file("/tmp/upload_info") {
                 log::warn!("Gagal menghapus file temporary: {:?}", e);
             }
-        } else {
-            println!("Info: Tidak ada file yang dipilih.");
-        }
+        } 
     }
 
-    // Menangani event tombol Ctrl+U dalam mode pengeditan
 
     fn start_keepalive_thread(
         &self,
@@ -1043,19 +1040,6 @@ impl LeChatPHPClient {
         // Kirim pesan
         let _ = self.tx.send(PostType::Post(msg_actived_bot.to_owned(), Some(SEND_TO_ALL.to_owned())));
         
-        // Hapus pesan setelah 3 menit
-        let tx_clone = self.tx.clone();
-        thread::spawn(move || {
-            thread::sleep(Duration::from_secs(100));
-            let _ = tx_clone.send(PostType::DeleteLast);
-        });
-        
-        // Kirim file saat bot diaktifkan
-        if bot_active {
-            let file_name = "1564478315_1337 2.0.gif".to_string();
-            let message = "Dantca Actived HAHAHA".to_string();
-            let _ = self.tx.send(PostType::Upload(file_name, SEND_TO_ALL.to_owned(), message));
-        }
     }
 fn handle_remove_name(&mut self, _app: &mut App) {
     unsafe { 
@@ -1200,99 +1184,71 @@ fn handle_remove_name(&mut self, _app: &mut App) {
         }
     }
 
-    //Strange
     fn handle_normal_mode_key_event_download_link(&mut self, app: &mut App) {
         if let Some(idx) = app.items.state.selected() {
             if let Some(item) = app.items.items.get(idx) {
-                if let Some(upload_link) = &item.upload_link {
-                    let url = format!("{}{}", self.config.url, upload_link);
-                    let _ = Command::new("curl")
-                        .args([
-                            "--socks5",
-                            "localhost:9050",
-                            "--socks5-hostname",
-                            "localhost:9050",
-                            &url,
-                        ])
-                        .arg("-o")
-                        .arg("download.img")
-                        .output()
-                        .expect("Failed to execute curl command");
-                } else if let Some((_, _, msg)) = get_message(&item.text, &self.config.members_tag)
-                {
-                    let finder = LinkFinder::new();
-                    let links: Vec<_> = finder.links(msg.as_str()).collect();
-                    if let Some(link) = links.first() {
-                        let url = link.as_str();
-                        let _ = Command::new("curl")
-                            .args([
-                                "--socks5",
-                                "localhost:9050",
-                                "--socks5-hostname",
-                                "localhost:9050",
-                                url,
-                            ])
-                            .arg("-o")
-                            .arg("download.img")
-                            .output()
-                            .expect("Failed to execute curl command");
-                    }
+                let url = self.get_download_url(item);
+                if let Some(url) = url {
+                    self.download_file(&url, "download");
                 }
             }
         }
     }
 
-    //Xpldan add
     fn handle_normal_mode_key_event_download_and_view(&mut self, app: &mut App) {
         if let Some(idx) = app.items.state.selected() {
             if let Some(item) = app.items.items.get(idx) {
-                let url = if let Some(upload_link) = &item.upload_link {
-                    format!("{}{}", self.config.url, upload_link)
-                } else if let Some((_, _, msg)) = get_message(&item.text, &self.config.members_tag) {
-                    let finder = LinkFinder::new();
-                    let links: Vec<_> = finder.links(msg.as_str()).collect();
-                    if let Some(link) = links.first() {
-                        link.as_str().to_string()
-                    } else {
-                        return; // No link found
-                    }
-                } else {
-                    return; // No link found
-                };
-
-                // Periksa tipe file dari URL
-                if url.ends_with(".png") || url.ends_with(".gif") || url.ends_with(".jpg") {
-                    // Untuk PNG atau GIF, tampilkan langsung tanpa mengunduh
-                    let _ = Command::new("xdg-open")
-                        .arg(&url)
-                        .output()
-                        .expect("Gagal menjalankan perintah xdg-open");
-                } else if url.ends_with(".zip") {
-                    // Untuk ZIP, unduh file
-                    let _ = Command::new("curl")
-                        .args([
-                            "--socks5",
-                            "localhost:9050",
-                            "--socks5-hostname",
-                            "localhost:9050",
-                            &url,
-                        ])
-                        .arg("-o")
-                        .arg("download.zip")
-                        .output()
-                        .expect("Gagal menjalankan perintah curl");
-
-                    // Beri tahu pengguna bahwa file telah diunduh
-                    println!("File ZIP telah diunduh sebagai 'download.zip'");
-                } else {
-                    // Untuk tipe file lain, coba tampilkan dengan xdg-open
-                    let _ = Command::new("xdg-open")
-                        .arg(&url)
-                        .output()
-                        .expect("Gagal menjalankan perintah xdg-open");
+                let url = self.get_download_url(item);
+                if let Some(url) = url {
+                    self.handle_file_by_type(&url);
                 }
             }
         }
+    }
+
+    // Fungsi pembantu untuk mendapatkan URL unduhan
+    fn get_download_url(&self, item: &Message) -> Option<String> {
+        if let Some(upload_link) = &item.upload_link {
+            Some(format!("{}{}", self.config.url, upload_link))
+        } else if let Some((_, _, msg)) = get_message(&item.text, &self.config.members_tag) {
+            let finder = LinkFinder::new();
+            finder.links(msg.as_str()).next().map(|link| link.as_str().to_string())
+        } else {
+            None
+        }
+    }
+
+    // Fungsi pembantu untuk mengunduh file
+    fn download_file(&self, url: &str, output: &str) {
+        let _ = Command::new("curl")
+            .args([
+                "--socks5", "localhost:9050",
+                "--socks5-hostname", "localhost:9050",
+                url,
+                "-o", output
+            ])
+            .output()
+            .expect("Gagal menjalankan perintah curl");
+    }
+
+    // Fungsi pembantu untuk menangani file berdasarkan tipenya
+    fn handle_file_by_type(&self, url: &str) {
+        if url.ends_with(".png") || url.ends_with(".gif") || url.ends_with(".jpg") {
+            self.open_file(url);
+        } else if url.ends_with(".zip") {
+            self.download_file(url, "download.zip");
+            println!("File ZIP telah diunduh sebagai 'download.zip'");
+        } else {
+            self.open_file(url);
+        }
+    }
+
+    // Fungsi pembantu untuk membuka file
+    fn open_file(&self, url: &str) {
+        let _ = Command::new("xdg-open")
+            .arg(url)
+            .output()
+            .expect("Gagal menjalankan perintah xdg-open");
     }
 
     fn handle_normal_mode_key_event_toggle_mute(&mut self) {
@@ -2202,47 +2158,35 @@ fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<Post
         if triggered {
             *count += 1;
             tx.send(PostType::Post(format!(">>> Dantca :  Hallo @{}, ->  [color=#ffffff]you have warns : [/color] [color=#00FF00]| {}/2 |[/color] -> Your Warnings :  {} [BANNED TOPIC]-< [LAST WARNS] <<<", username_to_kick, *count, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
-            let tx_clone = tx.clone(); 
-            thread::spawn(move || {
-                thread::sleep(Duration::from_secs(210));
-                tx_clone.send(PostType::DeleteLast).unwrap();
-            });
         }
         
         if *count >= 2 {
             tx.send(PostType::Kick(format!(">>> Dantca : Hallo  @{}, You have been warned multiple warns | = {} = |times and are now being kicked. BYE BYE !!  <<< ", username_to_kick, *count), username_to_kick.clone())).unwrap();
             add_kicked_user(username_to_kick.clone(), format!("Multiple warnings: {}", warns));
-            let tx_clone = tx.clone(); 
-            thread::spawn(move || {
-                thread::sleep(Duration::from_secs(210));
-                tx_clone.send(PostType::DeleteLast).unwrap();
-            });
         }
         
         if kicked {
             tx.send(PostType::Post(format!(">>> Dantca : Hallo @{}, -> your warnings: {} [BANNED TOPIC]-< BYE! BYE!  <<<", username_to_kick, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
             tx.send(PostType::Kick(format!("Kicked by Dantca bot: {}", warns), username_to_kick.clone())).unwrap();
             add_kicked_user(username_to_kick.clone(), warns.to_string());
-            let tx_clone = tx.clone();r
-            thread::spawn(move || {
-                thread::sleep(Duration::from_secs(210));
-                tx_clone.send(PostType::DeleteLast).unwrap();
-            });
         }
         if msg_lower.contains("link ") &&
         (
-        || msg_lower.contains("want ") 
+        msg_lower.contains("want ") 
         || msg_lower.contains("need ") 
         || msg_lower.contains("have ")
         || msg_lower.contains("how ")
-        || msg_lower.contains("lookin ")
+       || msg_lower.contains("lookin ")
         || msg_lower.contains("? ")
     ) {
-        tx.send(PostType::Post(format!("Hallo @{}, You can Try the command !-link !-sites to get a link. and send to @0 ",from)))
+        let message = format!("Hallo @{}, You can Try the command !-links !-sites to get a link. and send to @0  ",from);
+        tx.send(PostType::Post(message, Some(SEND_TO_ALL.to_owned()))).unwrap();
     } 
     if msg_lower.contains("@0 ") && (msg_lower.contains("how ") || msg_lower.contains("whare ") || msg_lower.contains("who ")) {
-        tx.send(PostType::Post(format!("Hallo @{}, to send to message to @0 you can click the button all-chatters and select @0 send your command to him ",from)))
+    let message = format!("Hallo @{}, to send to message to @0 you can click the button all-chatters and select @0 send your command to him ",from);
+        tx.send(PostType::Post(message, Some(SEND_TO_ALL.to_owned()))).unwrap();
     }
+}
 }
 
 fn check_message_content(msg: &str) -> (bool, bool, &str) {
@@ -2505,7 +2449,7 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
     }
     // satu kata  logic kicked
     match msgcopy.as_str() {
-        "porn" | "child porn" | "cp" | "gore" | "fuck" | "carding" | "horny" | "bitch"=> {
+        "porn" | "child porn" | "cp" | "gore" | "fuck" | "carding" | "horny" | "bitch" | "cock" | "cocaine" => {
             // Pesan peringatan untuk konten yang tidak pantas
             warns = "Bye Bye !!kicked by dantca bot";
             kicked = true;

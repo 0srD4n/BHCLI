@@ -3540,4 +3540,885 @@ fn get_message(root: &StyledText, members_tag: &str) -> Option<(String, Option<S
                     let to = match children.get(2)? {
                         StyledText::Styled(_, children) => {
                             match children.get(children.len() - 1)? {
-                                StyledText::Text(t) 
+                                StyledText::Text(t) => Some(t.to_owned()),
+                                _ => return None,
+                            }
+                        }
+                        _ => return None,
+                    };
+                    return Some((from, to, msg));
+                }
+            }
+            _ => return None,
+        }
+    }
+    return None;
+}
+
+#[derive(Debug, PartialEq, Clone)]
+enum MessageType {
+    UserMsg,
+    SysMsg,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+struct Message {
+    id: Option<usize>,
+    typ: MessageType,
+    date: String,
+    upload_link: Option<String>,
+    text: StyledText,
+    deleted: bool, // Either or not a message was deleted on the chat
+    hide: bool,    // Either ot not to hide a specific message
+}
+
+impl Message {
+    fn new(
+        id: Option<usize>,
+        typ: MessageType,
+        date: String,
+        upload_link: Option<String>,
+        text: StyledText,
+    ) -> Self {
+        Self {
+            id,
+            typ,
+            date,
+            upload_link,
+            text,
+            deleted: false,
+            hide: false,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+enum StyledText {
+    Styled(tuiColor, Vec<StyledText>),
+    Text(String),
+    None,
+}
+
+impl StyledText {
+    fn walk<F>(&self, mut clb: F)
+    where
+        F: FnMut(&StyledText),
+    {
+        let mut v: Vec<&StyledText> = vec![self];
+        loop {
+            if let Some(e) = v.pop() {
+                clb(e);
+                if let StyledText::Styled(_, children) = e {
+                    v.extend(children);
+                }
+                continue;
+            }
+            break;
+        }
+    }
+
+    fn text(&self) -> String {
+        let mut s = String::new();
+        self.walk(|n| {
+            if let StyledText::Text(t) = n {
+                s += t;
+            }
+        });
+        s
+    }
+
+    // Return a vector of each text parts & what color it should be
+    fn colored_text(&self) -> Vec<(tuiColor, String)> {
+        let mut out: Vec<(tuiColor, String)> = vec![];
+        let mut v: Vec<(tuiColor, &StyledText)> = vec![(tuiColor::White, self)];
+        loop {
+            if let Some((el_color, e)) = v.pop() {
+                match e {
+                    StyledText::Styled(tui_color, children) => {
+                        for child in children {
+                            v.push((*tui_color, child));
+                        }
+                    }
+                    StyledText::Text(t) => {
+                        out.push((el_color, t.to_owned()));
+                    }
+                    StyledText::None => {}
+                }
+                continue;
+            }
+            break;
+        }
+        out
+    }
+}
+
+fn parse_color(color_str: &str) -> tuiColor {
+    let mut color = tuiColor::White;
+    if color_str == "red" {
+        return tuiColor::Red;
+    }
+    if let Ok(rgb) = Rgb::from_hex_str(color_str) {
+        color = tuiColor::Rgb(
+            rgb.get_red() as u8,
+            rgb.get_green() as u8,
+            rgb.get_blue() as u8,
+        );
+    }
+    color
+}
+
+fn process_node(e: select::node::Node, mut color: tuiColor) -> (StyledText, Option<String>) {
+    match e.data() {
+        select::node::Data::Element(_, _) => {
+            let mut upload_link: Option<String> = None;
+            match e.name() {
+                Some("span") => {
+                    if let Some(style) = e.attr("style") {
+                        if let Some(captures) = COLOR_RGX.captures(style) {
+                            let color_match = captures.get(1).unwrap().as_str();
+                            color = parse_color(color_match);
+                        }
+                    }
+                }
+                Some("font") => {
+                    if let Some(color_str) = e.attr("color") {
+                        color = parse_color(color_str);
+                    }
+                }
+                Some("a") => {
+                    color = tuiColor::White;
+                    if let (Some("attachement"), Some(href)) = (e.attr("class"), e.attr("href")) {
+                        upload_link = Some(href.to_owned());
+                    }
+                }
+                Some("style") => {
+                    return (StyledText::None, None);
+                }
+                _ => {}
+            }
+            let mut children_texts: Vec<StyledText> = vec![];
+            let children = e.children();
+            for child in children {
+                let (st, ul) = process_node(child, color);
+                if ul.is_some() {
+                    upload_link = ul;
+                }
+                children_texts.push(st);
+            }
+            children_texts.reverse();
+            (StyledText::Styled(color, children_texts), upload_link)
+        }
+        select::node::Data::Text(t) => (StyledText::Text(t.to_string()), None),
+        select::node::Data::Comment(_) => (StyledText::None, None),
+    }
+}
+
+struct Users {
+    admin: Vec<(tuiColor, String)>,
+    staff: Vec<(tuiColor, String)>,
+    members: Vec<(tuiColor, String)>,
+    guests: Vec<(tuiColor, String)>,
+}
+
+impl Default for Users {
+    fn default() -> Self {
+        Self {
+            admin: Default::default(),
+            staff: Default::default(),
+            members: Default::default(),
+            guests: Default::default(),
+        }
+    }
+}
+
+impl Users {
+    fn all(&self) -> Vec<&(tuiColor, String)> {
+        let mut out = Vec::new();
+        out.extend(&self.admin);
+        out.extend(&self.staff);
+        out.extend(&self.members);
+        out.extend(&self.guests);
+        out
+    }
+
+    fn num_guests(&self) -> String {
+        let result = format!("{}", self.guests.len());
+        result
+        //u32::from(self.guests.len())
+    }
+
+    fn is_guest(&self, name: &str) -> bool {
+        self.guests.iter().find(|(_, username)| username == name).is_some()
+    }
+    
+    fn is_member(&self, name: &str) -> bool {
+        self.members.iter().find(|(_, username)| username == name).is_some() 
+        || self.staff.iter().find(|(_, username)| username == name).is_some() 
+    }
+}
+
+fn extract_users(doc: &Document) -> Users {
+    let mut users = Users::default();
+
+    if let Some(chatters) = doc.find(Attr("id", "chatters")).next() {
+        if let Some(tr) = chatters.find(Name("tr")).next() {
+            let mut th_count = 0;
+            for e in tr.children() {
+                if let select::node::Data::Element(_, _) = e.data() {
+                    if e.name() == Some("th") {
+                        th_count += 1;
+                        continue;
+                    }
+                    for user_span in e.find(Name("span")) {
+                        if let Some(user_style) = user_span.attr("style") {
+                            if let Some(captures) = COLOR_RGX.captures(user_style) {
+                                if let Some(color_match) = captures.get(1) {
+                                    let color = color_match.as_str().to_owned();
+                                    let tui_color = parse_color(&color);
+                                    let username = user_span.text();
+                                    match th_count {
+                                        1 => users.admin.push((tui_color, username)),
+                                        2 => users.staff.push((tui_color, username)),
+                                        3 => users.members.push((tui_color, username)),
+                                        4 => users.guests.push((tui_color, username)),
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    users
+}
+
+fn remove_suffix<'a>(s: &'a str, suffix: &str) -> &'a str {
+    s.strip_suffix(suffix).unwrap_or(s)
+}
+
+fn remove_prefix<'a>(s: &'a str, prefix: &str) -> &'a str {
+    s.strip_prefix(prefix).unwrap_or(s)
+}
+
+fn extract_messages(doc: &Document) -> anyhow::Result<Vec<Message>> {
+
+    let kicked_count = count_kicked_users(doc);
+    unsafe {
+        KICKED_COUNT = kicked_count as u32;
+    }
+    
+    let msgs = doc
+        .find(Attr("id", "messages"))
+        .next()
+        .ok_or(anyhow!("failed to get messages div"))?
+        .find(Attr("class", "msg"))
+        .filter_map(|tag| {
+            let mut id: Option<usize> = None;
+            if let Some(checkbox) = tag.find(Name("input")).next() {
+                let id_value: usize = checkbox.attr("value").unwrap().parse().unwrap();
+                id = Some(id_value);
+            }
+            if let Some(date_node) = tag.find(Name("small")).next() {
+                if let Some(msg_span) = tag.find(Name("span")).next() {
+                    let date = remove_suffix(&date_node.text(), " - ").to_owned();
+                    let typ = match msg_span.attr("class") {
+                        Some("usermsg") => MessageType::UserMsg,
+                        Some("sysmsg") => MessageType::SysMsg,
+                        _ => return None,
+                    };
+                    let (text, upload_link) = process_node(msg_span, tuiColor::White);
+                    return Some(Message::new(id, typ, date, upload_link, text));
+                }
+            }
+            None
+        })
+        .collect::<Vec<_>>();
+    Ok(msgs)
+}
+
+fn draw_terminal_frame(
+    f: &mut Frame<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    messages: &Arc<Mutex<Vec<Message>>>,
+    users: &Arc<Mutex<Users>>,
+    username: &str,
+) {
+    if app.long_message.is_none() {
+        let hchunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(1), Constraint::Length(25)].as_ref())
+            .split(f.size());
+
+        {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(
+                    [
+                        Constraint::Length(1),
+                        Constraint::Length(3),
+                        Constraint::Min(1),
+                    ]
+                    .as_ref(),
+                )
+                .split(hchunks[0]);
+
+            render_help_txt(f, app, chunks[0], username);
+            render_textbox(f, app, chunks[1]);
+            render_messages(f, app, chunks[2], messages);
+            render_users(f, hchunks[1], users);
+        }
+    } else {
+        let hchunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(1)])
+            .split(f.size());
+        {
+            render_long_message(f, app, hchunks[0]);
+        }
+    }
+}
+
+fn gen_lines(msg_txt: &StyledText, w: usize, line_prefix: &str) -> Vec<Vec<(tuiColor, String)>> {
+    let txt = msg_txt.text();
+    let wrapped = textwrap::fill(&txt, w);
+    let splits = wrapped.split("\n").collect::<Vec<&str>>();
+    let mut new_lines: Vec<Vec<(tuiColor, String)>> = Vec::new();
+    let mut ctxt = msg_txt.colored_text();
+    ctxt.reverse();
+    let mut ptr = 0;
+    let mut split_idx = 0;
+    let mut line: Vec<(tuiColor, String)> = Vec::new();
+    let mut first_in_line = true;
+    loop {
+        if let Some((color, mut txt)) = ctxt.pop() {
+            txt = txt.replace("\n", "");
+            if let Some(split) = splits.get(split_idx) {
+                if let Some(chr) = txt.chars().next() {
+                    if chr == ' ' && first_in_line {
+                        let skipped: String = txt.chars().skip(1).collect();
+                        txt = skipped;
+                    }
+                }
+
+                let remain = split.len() - ptr;
+                if txt.len() <= remain {
+                    ptr += txt.len();
+                    line.push((color, txt));
+                    first_in_line = false;
+                } else {
+                    line.push((color, txt));
+                    new_lines.push(line.clone());
+                    line.clear();
+                    line.push((tuiColor::White, line_prefix.to_owned()));
+                    //ctxt.push((color, txt);
+                    ptr = 0;
+                    split_idx += 1;
+                    first_in_line = true;
+                }
+            }
+        } else {
+            new_lines.push(line);
+            break;
+        }
+    }
+    new_lines
+}
+
+fn render_long_message(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r: Rect) {
+    if let Some(m) = &app.long_message {
+        let new_lines = gen_lines(&m.text, (r.width - 2) as usize, "");
+
+        let mut rows = vec![];
+        for line in new_lines.into_iter() {
+            let spans_vec: Vec<Span> = line
+                .into_iter()
+                .map(|(color, txt)| Span::styled(txt, Style::default().fg(color)))
+                .collect();
+            rows.push(Spans::from(spans_vec));
+        }
+
+        let messages_list_items = vec![ListItem::new(rows)];
+
+        let messages_list = List::new(messages_list_items)
+            .block(Block::default().borders(Borders::ALL).title(""))
+            .highlight_style(
+                Style::default()
+                    .bg(tuiColor::Rgb(50, 50, 50))
+                    .add_modifier(Modifier::BOLD),
+            );
+
+        f.render_widget(messages_list, r);
+    }
+}
+
+fn render_help_txt(
+    f: &mut Frame<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    r: Rect,
+    curr_user: &str,
+) {
+    let (mut msg, style) = match app.input_mode {
+        InputMode::Normal => (
+            vec![
+                Span::raw("Press "),
+                Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to exit, "),
+                Span::styled("i", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to start editing."),
+            ],
+            Style::default(),
+        ),
+        InputMode::Editing | InputMode::EditingErr => (
+            vec![
+                Span::raw("Press "),
+                Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to stop editing, "),
+                Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to record the message"),
+            ],
+            Style::default(),
+        ),
+        InputMode::LongMessage => (vec![], Style::default()),
+    };
+    msg.extend(vec![Span::raw(format!(" | {}", curr_user))]);
+    if app.is_muted {
+        let fg = tuiColor::Red;
+        let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
+        msg.extend(vec![Span::raw(" | "), Span::styled("muted", style)]);
+    } else {
+        let fg = tuiColor::LightGreen;
+        let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
+        msg.extend(vec![Span::raw(" | "), Span::styled("not muted", style)]);
+    }
+
+    if app.display_guest_view {
+        let fg = tuiColor::LightGreen;
+        let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
+        msg.extend(vec![Span::raw(" | "), Span::styled("G", style)]);
+    } else {
+        let fg = tuiColor::Gray;
+        let style = Style::default().fg(fg);
+        msg.extend(vec![Span::raw(" | "), Span::styled("G", style)]);
+    }
+
+    if app.display_member_view {
+        let fg = tuiColor::LightGreen;
+        let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
+        msg.extend(vec![Span::raw(" | "), Span::styled("M", style)]);
+    } else {
+        let fg = tuiColor::Gray;
+        let style = Style::default().fg(fg);
+        msg.extend(vec![Span::raw(" | "), Span::styled("M", style)]);
+    }
+
+    if app.display_hidden_msgs {
+        let fg = tuiColor::LightGreen;
+        let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
+        msg.extend(vec![Span::raw(" | "), Span::styled("H", style)]);
+    } else {
+        let fg = tuiColor::Gray;
+        let style = Style::default().fg(fg);
+        msg.extend(vec![Span::raw(" | "), Span::styled("H", style)]);
+    }
+    let mut text = Text::from(Spans::from(msg));
+    text.patch_style(style);
+    let help_message = Paragraph::new(text);
+    f.render_widget(help_message, r);
+}
+
+fn render_textbox(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r: Rect) {
+    let w = (r.width - 3) as usize;
+    let str = app.input.clone();
+    let mut input_str = str.as_str();
+    let mut overflow = 0;
+    if app.input_idx >= w {
+        overflow = std::cmp::max(app.input.width() - w, 0);
+        input_str = &str[overflow..];
+    }
+    let input = Paragraph::new(input_str)
+        .style(match app.input_mode {
+            InputMode::LongMessage => Style::default(),
+            InputMode::Normal => Style::default(),
+            InputMode::Editing => Style::default().fg(tuiColor::Yellow),
+            InputMode::EditingErr => Style::default().fg(tuiColor::Red),
+        })
+        .block(Block::default().borders(Borders::ALL).title("Input"));
+    f.render_widget(input, r);
+    match app.input_mode {
+        InputMode::LongMessage => {}
+        InputMode::Normal =>
+            // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
+            {}
+
+        InputMode::Editing | InputMode::EditingErr => {
+            // Make the cursor visible and ask tui-rs to put it at the specified coordinates after rendering
+            f.set_cursor(
+                // Put cursor past the end of the input text
+                r.x + app.input_idx as u16 - overflow as u16 + 1,
+                // Move one line down, from the border to the input line
+                r.y + 1,
+            )
+        }
+    }
+}
+
+fn render_messages(
+    f: &mut Frame<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    r: Rect,
+    messages: &Arc<Mutex<Vec<Message>>>,
+) {
+    // Messages
+    app.items.items.clear();
+    let messages = messages.lock().unwrap();
+    let messages_list_items: Vec<ListItem> = messages
+        .iter()
+        .filter_map(|m| {
+            if !app.display_hidden_msgs && m.hide {
+                return None;
+            }
+            // Simulate a guest view (remove "PMs" and "Members chat" messages)
+            if app.display_guest_view {
+                // TODO: this is not efficient at all
+                let text = m.text.text();
+                if text.starts_with(&app.members_tag) || text.starts_with(&app.staffs_tag) {
+                    return None;
+                }
+                if let Some((_, Some(_), _)) = get_message(&m.text, &app.members_tag) {
+                    return None;
+                }
+            }
+            // Display only messages from members and staff
+            if app.display_member_view {
+                // In members mode, include only messages from members and staff
+                let text = m.text.text();
+                if !text.starts_with(&app.members_tag) && !text.starts_with(&app.staffs_tag) {
+                    return None;
+                }
+                if let Some((_, Some(_), _)) = get_message(&m.text, &app.members_tag) {
+                    return None;
+                }
+            }
+
+            if app.filter != "" {
+                if !m
+                    .text
+                    .text()
+                    .to_lowercase()
+                    .contains(&app.filter.to_lowercase())
+                {
+                    return None;
+                }
+            }
+
+            app.items.items.push(m.clone());
+
+            let new_lines = gen_lines(&m.text, (r.width - 20) as usize, " ".repeat(17).as_str());
+
+            let mut rows = vec![];
+            let date_style = match (m.deleted, m.hide) {
+                (false, true) => Style::default().fg(tuiColor::Gray),
+                (false, _) => Style::default().fg(tuiColor::DarkGray),
+                (true, _) => Style::default().fg(tuiColor::Red),
+            };
+            let mut spans_vec = vec![Span::styled(m.date.clone(), date_style)];
+            let show_sys_sep = app.show_sys && m.typ == MessageType::SysMsg;
+            let sep = if show_sys_sep { " * " } else { " - " };
+            spans_vec.push(Span::raw(sep));
+            for (idx, line) in new_lines.into_iter().enumerate() {
+                // Spams can take your whole screen, so we limit to 5 lines.
+                if idx >= 5 {
+                    spans_vec.push(Span::styled(
+                        "                 [â€¦]",
+                        Style::default().fg(tuiColor::White),
+                    ));
+                    rows.push(Spans::from(spans_vec));
+                    break;
+                }
+                for (color, txt) in line {
+                    spans_vec.push(Span::styled(txt, Style::default().fg(color)));
+                }
+                rows.push(Spans::from(spans_vec.clone()));
+                spans_vec.clear();
+            }
+
+            let style = match (m.deleted, m.hide) {
+                (true, _) => Style::default().bg(tuiColor::Rgb(30, 0, 0)),
+                (_, true) => Style::default().bg(tuiColor::Rgb(20, 20, 20)),
+                _ => Style::default(),
+            };
+            Some(ListItem::new(rows).style(style))
+        })
+        .collect();
+
+    let messages_list = List::new(messages_list_items)
+        .block(Block::default().borders(Borders::ALL).title("Messages"))
+        .highlight_style(
+            Style::default()
+                .bg(tuiColor::Rgb(50, 50, 50))
+                .add_modifier(Modifier::BOLD),
+        );
+    f.render_stateful_widget(messages_list, r, &mut app.items.state)
+}
+
+fn render_users(f: &mut Frame<CrosstermBackend<io::Stdout>>, r: Rect, users: &Arc<Mutex<Users>>) {
+    // Users lists
+    let users = users.lock().unwrap();
+    let mut users_list: Vec<ListItem> = vec![];
+    let mut users_types: Vec<(&Vec<(tuiColor, String)>, &str)> = Vec::new();
+    users_types.push((&users.admin, "-- Admin --"));
+    users_types.push((&users.staff, "-- Staff --"));
+    users_types.push((&users.members, "-- Members --"));
+    users_types.push((&users.guests, "-- Guests --"));
+    for (users, label) in users_types.into_iter() {
+        users_list.push(ListItem::new(Span::raw(label)));
+        for (tui_color, username) in users.iter() {
+            let span = Span::styled(username, Style::default().fg(*tui_color));
+            users_list.push(ListItem::new(span));
+        }
+    }
+    let users = List::new(users_list).block(Block::default().borders(Borders::ALL).title("Users"));
+    f.render_widget(users, r);
+}
+
+fn random_string(n: usize) -> String {
+    let s: Vec<u8> = thread_rng().sample_iter(&Alphanumeric).take(n).collect();
+    std::str::from_utf8(&s).unwrap().to_owned()
+}
+
+#[derive(PartialEq)]
+enum InputMode {
+    LongMessage,
+    Normal,
+    Editing,
+    EditingErr,
+}
+
+/// App holds the state of the application
+struct App {
+    /// Current value of the input box
+    input: String,
+    input_idx: usize,
+    /// Current input mode
+    input_mode: InputMode,
+    is_muted: bool,
+    show_sys: bool,
+    display_guest_view: bool,
+    display_member_view: bool,
+    display_hidden_msgs: bool,
+    items: StatefulList<Message>,
+    filter: String,
+    members_tag: String,
+    staffs_tag: String,
+    long_message: Option<Message>,
+    commands: Commands,
+}
+
+impl Default for App {
+    fn default() -> App {
+        // Read commands from the file and set them as default values
+        let commands = if let Ok(config_path) = confy::get_configuration_file_path("bhcli", None) {
+            if let Some(config_path_str) = config_path.to_str() {
+                match read_commands_file(config_path_str) {
+                    Ok(commands) => commands,
+                    Err(err) => {
+                        log::error!(
+                            "Failed to read commands from config file - {} :
+{}",
+                            config_path_str,
+                            err
+                        );
+                        Commands {
+                            commands: HashMap::new(),
+                        }
+                    }
+                }
+            } else {
+                log::error!("Failed to convert configuration file path to string.");
+                Commands {
+                    commands: HashMap::new(),
+                }
+            }
+        } else {
+            log::error!("Failed to get configuration file path.");
+            Commands {
+                commands: HashMap::new(),
+            }
+        };
+
+        App {
+            input: String::new(),
+            input_idx: 0,
+            input_mode: InputMode::Normal,
+            is_muted: false,
+            show_sys: false,
+            display_guest_view: false,
+            display_member_view: false,
+            display_hidden_msgs: false,
+            items: StatefulList::new(),
+            filter: "".to_owned(),
+            members_tag: "".to_owned(),
+            staffs_tag: "".to_owned(),
+            long_message: None,
+            commands,
+        }
+    }
+}
+
+impl App {
+    fn update_filter(&mut self) {
+        if let Some(captures) = FIND_RGX.captures(&self.input) {
+            // Find
+            self.filter = captures.get(1).map_or("", |m| m.as_str()).to_owned();
+        }
+    }
+
+    fn clear_filter(&mut self) {
+        if FIND_RGX.is_match(&self.input) {
+            self.filter = "".to_owned();
+            self.input = "".to_owned();
+            self.input_idx = 0;
+        }
+    }
+}
+
+pub enum Event<I> {
+    Input(I),
+    Tick,
+    Terminate,
+    NeedLogin,
+}
+
+/// A small event handler that wrap termion input and tick events. Each event
+/// type is handled in its own thread and returned to a common `Receiver`
+struct Events {
+    messages_updated_rx: crossbeam_channel::Receiver<()>,
+    exit_rx: crossbeam_channel::Receiver<ExitSignal>,
+    rx: crossbeam_channel::Receiver<Event<CEvent>>,
+}
+
+#[derive(Debug, Clone)]
+struct Config {
+    pub exit_rx: crossbeam_channel::Receiver<ExitSignal>,
+    pub messages_updated_rx: crossbeam_channel::Receiver<()>,
+    pub tick_rate: Duration,
+}
+
+impl Events {
+    fn with_config(config: Config) -> (Events, thread::JoinHandle<()>) {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let tick_rate = config.tick_rate;
+        let exit_rx = config.exit_rx;
+        let messages_updated_rx = config.messages_updated_rx;
+        let exit_rx1 = exit_rx.clone();
+        let thread_handle = thread::spawn(move || {
+            let mut last_tick = Instant::now();
+            loop {
+                // poll for tick rate duration, if no events, sent tick event.
+                let timeout = tick_rate
+                    .checked_sub(last_tick.elapsed())
+                    .unwrap_or_else(|| Duration::from_secs(0));
+                if event::poll(timeout).unwrap() {
+                    let evt = event::read().unwrap();
+                    match evt {
+                        CEvent::FocusGained => {}
+                        CEvent::FocusLost => {}
+                        CEvent::Paste(_) => {}
+                        CEvent::Resize(_, _) => tx.send(Event::Input(evt)).unwrap(),
+                        CEvent::Key(_) => tx.send(Event::Input(evt)).unwrap(),
+                        CEvent::Mouse(mouse_event) => {
+                            match mouse_event.kind {
+                                MouseEventKind::ScrollDown
+                                | MouseEventKind::ScrollUp
+                                | MouseEventKind::Down(_) => {
+                                    tx.send(Event::Input(evt)).unwrap();
+                                }
+                                _ => {}
+                            };
+                        }
+                    };
+                }
+                if last_tick.elapsed() >= tick_rate {
+                    select! {
+                        recv(&exit_rx1) -> _ => break,
+                        default => {},
+                    }
+                    last_tick = Instant::now();
+                }
+            }
+        });
+        (
+            Events {
+                rx,
+                exit_rx,
+                messages_updated_rx,
+            },
+            thread_handle,
+        )
+    }
+
+    fn next(&self) -> Result<Event<CEvent>, crossbeam_channel::RecvError> {
+        select! {
+            recv(&self.rx) -> evt => evt,
+            recv(&self.messages_updated_rx) -> _ => Ok(Event::Tick),
+            recv(&self.exit_rx) -> v => match v {
+                Ok(ExitSignal::Terminate) => Ok(Event::Terminate),
+                Ok(ExitSignal::NeedLogin) => Ok(Event::NeedLogin),
+                Err(_) => Ok(Event::Terminate),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gen_lines_test() {
+        let txt = StyledText::Styled(
+            tuiColor::White,
+            vec![
+                StyledText::Styled(
+                    tuiColor::Rgb(255, 255, 255),
+                    vec![
+                        StyledText::Text(" prmdbba pwuvðŸ’“".to_owned()),
+                        StyledText::Styled(
+                            tuiColor::Rgb(255, 255, 255),
+                            vec![StyledText::Styled(
+                                tuiColor::Rgb(0, 255, 0),
+                                vec![StyledText::Text("PMW".to_owned())],
+                            )],
+                        ),
+                        StyledText::Styled(
+                            tuiColor::Rgb(255, 255, 255),
+                            vec![StyledText::Styled(
+                                tuiColor::Rgb(255, 255, 255),
+                                vec![StyledText::Text("A".to_owned())],
+                            )],
+                        ),
+                        StyledText::Styled(
+                            tuiColor::Rgb(255, 255, 255),
+                            vec![StyledText::Styled(
+                                tuiColor::Rgb(0, 255, 0),
+                                vec![StyledText::Text("XOS".to_owned())],
+                            )],
+                        ),
+                        StyledText::Text(
+                            "pqb a mavx pkj fhsoeycg oruzb asd lk ruyaq re lheot mbnrw ".to_owned(),
+                        ),
+                    ],
+                ),
+                StyledText::Text(" - ".to_owned()),
+                StyledText::Styled(
+                    tuiColor::Rgb(255, 255, 255),
+                    vec![StyledText::Text("rytxvgs".to_owned())],
+                ),
+            ],
+        );
+        let lines = gen_lines(&txt, 71, "");
+        assert_eq!(lines.len(), 2);
+    }
+}
