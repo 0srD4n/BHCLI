@@ -3,7 +3,7 @@ mod lechatphp;
 mod util;
 use crate::lechatphp::LoginErr;
 use anyhow::{anyhow, Context};
-use chrono::{DateTime, Datelike, NaiveDateTime, Utc};
+use chrono::{ Datelike, NaiveDateTime, Utc};
 use clap::Parser;
 use clipboard::ClipboardContext;
 use clipboard::ClipboardProvider;
@@ -70,7 +70,6 @@ const SEND_TO_STAFFS: &str = "s %";
 const SEND_TO_ADMINS: &str = "s _";
 const SOUND1: &[u8] = include_bytes!("sound1.mp3");
 const XPLDAN: &str = "XplDan";
-const DKF_URL: &str = "http://dkforestseeaaq2dqz2uflmlsybvnq2irzn4ygyvu53oazyorednviid.onion";
 const SERVER_DOWN_500_ERR: &str = "500 Internal Server Error, server down";
 const SERVER_DOWN_ERR: &str = "502 Bad Gateway, server down";
 const KICKED_ERR: &str = "You have been kicked";
@@ -124,7 +123,6 @@ struct Profile {
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 struct MyConfig {
-    dkf_api_key: Option<String>,
     profiles: HashMap<String, Profile>,
 }
 
@@ -134,8 +132,6 @@ struct MyConfig {
 #[command(version = "0.1.0")]
 
 struct Opts {
-    #[arg(long, env = "DKF_API_KEY")]
-    dkf_api_key: Option<String>,
     #[arg(short, long, env = "BHC_USERNAME")]
     username: Option<String>,
     #[arg(short, long, env = "BHC_PASSWORD")]
@@ -656,6 +652,7 @@ impl LeChatPHPClient {
                 // tx.send(PostType::DeleteLast).unwrap();
             }
             let msg = PostType::Profile("#90ee90".to_owned(), username);
+            
             tx.send(msg).unwrap();
         });
     }
@@ -1310,9 +1307,9 @@ fn handle_remove_name(&mut self, _app: &mut App) {
                 get_username(&self.base_client.username, &text, &self.config.members_tag)
             {
                 if text.text().starts_with(&app.members_tag) {
-                    app.input = format!("/m @{} ", username);
+                    app.input = format!("/m Halo @{} ", username);
                 } else {
-                    app.input = format!("@{} ", username);
+                    app.input = format!("Halo @{} ", username);
                 }
                 app.input_idx = app.input.width();
                 app.input_mode = InputMode::Editing;
@@ -2122,7 +2119,7 @@ fn toggle_bot_active(active: bool, tx: &crossbeam_channel::Sender<PostType>, fro
     let status = if active { "Activated" } else { "Deactivated" };
     let message = format!(">> -- [color=#ffffff]Dantca Has Been {} By[/color] - [@{}] -- <", status, from);
     
-    if let Err(e) = tx.send(PostType::Post(message, Some(SEND_TO_ALL.to_owned()))) {
+    if let Err(e) = tx.send(PostType::Post(message, Some(SEND_TO_MEMBERS.to_owned()))) {
         eprintln!("Gagal mengirim pesan: {:?}", e);
     }
 
@@ -2138,7 +2135,7 @@ fn check_bot_status(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
         "> - Dantca Not Running - <"
     };
     let messtats = format!(" [color=#ffffff] {} == [/color] [ @{} ]", status_message, from);
-    tx.send(PostType::Post(messtats, Some(SEND_TO_ALL.to_owned()))).unwrap();
+    tx.send(PostType::Post(messtats, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
 }
 
 fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
@@ -2157,16 +2154,16 @@ fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<Post
         
         if triggered {
             *count += 1;
-            tx.send(PostType::Post(format!(">>> Dantca :  Hallo @{}, ->  [color=#ffffff]you have warns : [/color] [color=#00FF00]| {}/2 |[/color] -> Your Warnings :  {} [BANNED TOPIC]-< [LAST WARNS] <<<", username_to_kick, *count, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
+            tx.send(PostType::Post(format!(">>> Dantca :  Hallo @{}, ->  [color=#ffffff] you have warns : [/color] [color=#00FF00]| {}/2 |[/color] -> Your Warnings :  {} [BANNED TOPIC]-< [LAST WARNS] <<<", username_to_kick, *count, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
         }
         
         if *count >= 2 {
-            tx.send(PostType::Kick(format!(">>> Dantca : Hallo  @{}, You have been warned multiple warns | = {} = |times and are now being kicked. BYE BYE !!  <<< ", username_to_kick, *count), username_to_kick.clone())).unwrap();
+            tx.send(PostType::Kick(format!(">>> Dantca : Hallo  @{},[color=#ffffff] You have been warned multiple warns | = {} = |times and are now being kicked. BYE BYE !![/color] <<< ", username_to_kick, *count), username_to_kick.clone())).unwrap();
             add_kicked_user(username_to_kick.clone(), format!("Multiple warnings: {}", warns));
         }
         
         if kicked {
-            tx.send(PostType::Post(format!(">>> Dantca : Hallo @{}, -> your warnings: {} [BANNED TOPIC]-< BYE! BYE!  <<<", username_to_kick, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
+            tx.send(PostType::Post(format!(">>> Dantca :  Hallo @{}, [color=#ffffff]-> your warnings: {} [BANNED TOPIC]-< BYE! BYE![/color]  <<<", username_to_kick, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
             tx.send(PostType::Kick(format!("Kicked by Dantca bot: {}", warns), username_to_kick.clone())).unwrap();
             add_kicked_user(username_to_kick.clone(), warns.to_string());
         }
@@ -2276,11 +2273,7 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
     {
         warns = "Social Media Hacking is bad form ";
         triggered = true;
-    }             
-    if msgcopy.contains("ableonion ") {
-        warns = "Able Onion is a ";
-        triggered = true;
-    }      
+    }                 
     if msgcopy.contains("cp ") && 
         ( 
             msgcopy.contains("where ")
@@ -2367,7 +2360,7 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
         warns = "Racial Insults won't be tolerated.";
         kicked = true;
     }             
-    if msgcopy.contains("bomb") && 
+    if msgcopy.contains("bomb ") && 
         (
             msgcopy.contains("where ")
             || msgcopy.contains("want ")
@@ -2406,7 +2399,7 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
         warns = "Paypal - not here PAL! Be gone.";
         kicked = true;
     }
-    if (msgcopy.contains("cc ") || msgcopy.contains("buy") || msgcopy.contains("sell ") || msgcopy.contains("credit ") || msgcopy.contains("card ")) && 
+    if (msgcopy.contains("cc ") || msgcopy.contains("credit ") || msgcopy.contains("card ")) && 
         (
             msgcopy.contains("make") || 
             msgcopy.contains("dump") ||
@@ -2800,39 +2793,6 @@ pub struct DkfNotifierResp {
     pub last_message_created_at: String,
 }
 
-fn start_dkf_notifier(client: &Client, dkf_api_key: &str) {
-    let client = client.clone();
-    let dkf_api_key = dkf_api_key.to_owned();
-    let mut last_known_date = Utc::now();
-    thread::spawn(move || loop {
-        let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-        let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();
-
-        let params: Vec<(&str, String)> = vec![(
-            "last_known_date",
-            last_known_date.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        )];
-        let right_url = format!("{}/api/v1/chat/1/notifier", DKF_URL);
-        if let Ok(resp) = client
-            .post(right_url)
-            .form(&params)
-            .header("DKF_API_KEY", &dkf_api_key)
-            .send()
-        {
-            if let Ok(txt) = resp.text() {
-                if let Ok(v) = serde_json::from_str::<DkfNotifierResp>(&txt) {
-                    if v.pm_sound || v.tagged_sound {
-                        stream_handle.play_raw(source.convert_samples()).unwrap();
-                    }
-                    last_known_date = DateTime::parse_from_rfc3339(&v.last_message_created_at)
-                        .unwrap()
-                        .with_timezone(&Utc);
-                }
-            }
-        }
-        thread::sleep(Duration::from_secs(5));
-    });
-}
 
 // Start thread that looks for new emails on DNMX every minutes.
 fn start_dnmx_mail_notifier(client: &Client, username: &str, password: &str) {
@@ -2907,9 +2867,6 @@ fn main() -> anyhow::Result<()> {
         println!("Config path: {:?}", config_path);
     }
     if let Ok(cfg) = confy::load::<MyConfig>("bhcli", None) {
-        if opts.dkf_api_key.is_none() {
-            opts.dkf_api_key = cfg.dkf_api_key;
-        }
         if let Some(default_profile) = cfg.profiles.get(&opts.profile) {
             if opts.username.is_none() {
                 opts.username = Some(default_profile.username.clone());
@@ -2939,9 +2896,6 @@ fn main() -> anyhow::Result<()> {
         start_dnmx_mail_notifier(&client, &dnmx_username, &opts.dnmx_password.unwrap())
     }
 
-    if let Some(dkf_api_key) = &opts.dkf_api_key {
-        start_dkf_notifier(&client, dkf_api_key);
-    }
 
     let guest_color = get_guest_color(opts.guest_color);
     let username = ask_username(opts.username);
@@ -3368,7 +3322,7 @@ fn send_greeting(tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
             for staff in &current_staff {
                 if !prev_staff.contains(staff) {
                     let welcome_msg = format!(
-                        "Dantca -> Welcome back, @{}! (auto-message) do not reply count kicked in the session chat is: {} ", staff, KICKED_COUNT);
+                        "Dantca -> [color=#ffffff] Welcome back, @{}! (auto-message) do not reply count kicked in the session chat is: [/color] {} ", staff, KICKED_COUNT);
                     tx.send(PostType::Post(welcome_msg, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
                 }
             }
@@ -3379,7 +3333,7 @@ fn send_greeting(tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
             for member in &current_members {
                 if !prev_members.contains(member) {
                     let welcome_msg = format!(
-                        "Dantca -> Welcome back, @{}! (auto-message) do not reply count kicked in the session chat is: {}", member, KICKED_COUNT);
+                        "Dantca -> [color=#ffffff] Welcome back, @{}! (auto-message) do not reply count kicked in the session chat is: [/color] {} ", member, KICKED_COUNT);
                     tx.send(PostType::Post(welcome_msg, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
                     
                     let (_stream, stream_handle) = OutputStream::try_default().unwrap();

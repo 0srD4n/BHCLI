@@ -1,12 +1,0 @@
---2024-05-11 22:20:06--  https://vid41c.site/e/M0J555G0XJ24?t=4xjRDPEiBFYKyg%3D%3D
-Loaded CA certificate '/etc/ssl/certs/ca-certificates.crt'
-Resolving vid41c.site (vid41c.site)... 172.67.170.22, 104.21.39.85, 2606:4700:3033::6815:2755, ...
-Connecting to vid41c.site (vid41c.site)|172.67.170.22|:443... connected.
-HTTP request sent, awaiting response... 200 OK
-Length: unspecified [text/html]
-Saving to: ‘M0J555G0XJ24?t=4xjRDPEiBFYKyg==’
-
-         M0J555G0     [<=>          ]       0  --.-KB/s               M0J555G0XJ24?t=4x     [ <=>         ]    1008  --.-KB/s    in 0s      
-
-2024-05-11 22:20:08 (13.5 MB/s) - ‘M0J555G0XJ24?t=4xjRDPEiBFYKyg==’ saved [1008]
-
