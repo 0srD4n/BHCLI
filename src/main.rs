@@ -295,18 +295,18 @@ impl LeChatPHPClient {
         // Gunakan dialog native untuk memilih file
         if let Some(file_path) = rfd::FileDialog::new().pick_file() {
             // Buka terminal baru untuk input menggunakan xterm
-            let output = match std::process::Command::new("xterm")
+            let output = std::process::Command::new("xterm")
                 .arg("-e")
                 .arg("bash")
                 .arg("-c")
                 .arg(format!(
                     r#"
-                    echo "File dipilih: {}";
+                    echo "File yang dipilih: {}";
                     echo "Pilih tujuan pengiriman:";
-                    echo "1. Send to All";
-                    echo "2. Send to Members";
-                    echo "3. Send to Staffs";
-                    echo "4. Send to Admins";
+                    echo "1. Kirim ke Semua";
+                    echo "2. Kirim ke Anggota";
+                    echo "3. Kirim ke Staf";
+                    echo "4. Kirim ke Admin";
                     read -p "Masukkan pilihan (1/2/3/4): " choice;
                     case $choice in
                         1) send_to="all" ;;
@@ -321,30 +321,12 @@ impl LeChatPHPClient {
                     "#,
                     file_path.display()
                 ))
-                .output() {
-                Ok(output) => output,
-                Err(e) => {
-                    log::error!("Gagal membuka xterm: {:?}", e);
-                    println!("Error: Gagal membuka xterm untuk input.");
-                    return;
-                }
-            };
-
-            if !output.status.success() {
-                log::error!("Xterm command failed: {:?}", output.stderr);
-                println!("Error: Gagal menjalankan perintah xterm.");
-                return;
-            }
+                .output()
+                .expect("Gagal menjalankan xterm");
 
             // Baca hasil input dari file temporary
-            let upload_info = match std::fs::read_to_string("/tmp/upload_info") {
-                Ok(info) => info,
-                Err(e) => {
-                    log::error!("Gagal membaca file upload_info: {:?}", e);
-                    println!("Error: Gagal membaca informasi unggahan.");
-                    return;
-                }
-            };
+            let upload_info = std::fs::read_to_string("/tmp/upload_info")
+                .expect("Gagal membaca file upload_info");
 
             let mut parts = upload_info.trim().split('|');
             let send_to = parts.next().unwrap_or("").to_string();
@@ -358,18 +340,11 @@ impl LeChatPHPClient {
                 _ => SEND_TO_ALL,
             }.to_owned();
 
-            // Kirim permintaan unggah
-            if let Err(e) = self.post_msg(PostType::Upload(file_path.to_str().unwrap_or("").to_string(), send_to, msg)) {
-                log::error!("Gagal mengirim permintaan unggah: {:?}", e);
-                println!("Error: Gagal mengirim permintaan unggah: {:?}", e);
-            } else {
-                println!("Sukses: Permintaan unggah berhasil dikirim untuk file: {}", file_path.display());
-            }
+            // Konversi file_path dari PathBuf ke String
+            let file_path_str = file_path.to_str().unwrap_or("").to_string();
 
-            // Hapus file temporary
-            if let Err(e) = std::fs::remove_file("/tmp/upload_info") {
-                log::warn!("Gagal menghapus file temporary: {:?}", e);
-            }
+            // Kirim permintaan unggah
+            self.post_msg(PostType::Upload(file_path_str, send_to, msg)).unwrap();
         } 
     }
 
@@ -385,7 +360,7 @@ impl LeChatPHPClient {
                 let kicked_count = unsafe { KICKED_COUNT };
                 let msg_keep = format!("[color=#ffffff]>>> H-E-L-L-O C-H-A-T-T-E-R-S W-E-L-C-O-M-E B-A-C-K TO BHC <<<[/color]
                 Keep it legal and enjoy your stay. 
-                You can try !-rules && !-help before. Please follow the !-rules
+                You can try !-rules && ! help before. Please follow the !-rules
                  [color=#00ff08]kicked users in the sesions chat -> {} <- [/color] (Auto message)", kicked_count);
                 tx.send(PostType::Post(msg_keep.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
                 thread::sleep(Duration::from_secs(280));
@@ -2147,7 +2122,7 @@ fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<Post
 
     if let Some((_color, _username)) = users.guests.iter().find(|(_color, name)| name.to_lowercase() == from_lower) {
         let username_to_kick = from_lower.clone();
-        let (triggered, kicked, warns) = check_message_content(&msg_lower);
+        let (triggered, kicked, warns, help, message) = check_message_content(&msg_lower);
         
         let mut warned_users = WARNED_USERS.lock().unwrap();
         let count = warned_users.entry(from_lower.clone()).or_insert(0);
@@ -2167,30 +2142,20 @@ fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<Post
             tx.send(PostType::Kick(format!("Kicked by Dantca bot: {}", warns), username_to_kick.clone())).unwrap();
             add_kicked_user(username_to_kick.clone(), warns.to_string());
         }
-        if msg_lower.contains("link ") &&
-        (
-        msg_lower.contains("want ") 
-        || msg_lower.contains("need ") 
-        || msg_lower.contains("have ")
-        || msg_lower.contains("how ")
-       || msg_lower.contains("lookin ")
-        || msg_lower.contains("? ")
-    ) {
-        let message = format!("Hallo @{}, You can Try the command !-links !-sites to get a link. and send to @0  ",from);
-        tx.send(PostType::Post(message, Some(SEND_TO_ALL.to_owned()))).unwrap();
-    } 
-    if msg_lower.contains("@0 ") && (msg_lower.contains("how ") || msg_lower.contains("whare ") || msg_lower.contains("who ")) {
-    let message = format!("Hallo @{}, to send to message to @0 you can click the button all-chatters and select @0 send your command to him ",from);
-        tx.send(PostType::Post(message, Some(SEND_TO_ALL.to_owned()))).unwrap();
+        if help {
+let msh = format!("Hallo @{}, {}", from, message);
+            tx.send(PostType::Post(msh, Some(SEND_TO_ALL.to_owned()))).unwrap();
+        }
     }
 }
-}
 
-fn check_message_content(msg: &str) -> (bool, bool, &str) {
+fn check_message_content(msg: &str) -> (bool, bool, &str, bool, &str) {
     let msgcopy = msg.to_lowercase();
     let mut triggered = false;
     let mut kicked = false;
+    let mut help = false;
     let mut warns = "";
+    let mut mass = "";
 
     if msgcopy.contains("betting") &&
         (
@@ -2453,7 +2418,25 @@ fn check_message_content(msg: &str) -> (bool, bool, &str) {
         warns = "Message too long (over 1000 characters). if is the filter you can try send to @0 user";
         triggered = true;
     }
-    (triggered, kicked, warns)
+    if msgcopy.contains("link ") && 
+    (msgcopy.contains("want ") 
+     || msgcopy.contains("need ")
+     || msgcopy.contains("have ")
+     || msgcopy.contains("how ")
+     || msgcopy.contains("lookin ")
+     || msgcopy.contains("? ")) {
+        mass = "you can try command !-links !-sites for get link and send to @0";
+        help = true;
+    }
+    if msgcopy.contains("@0 ") && 
+      (msgcopy.contains("how ") 
+     ||msgcopy.contains("whare ") 
+     ||msgcopy.contains("who ")) {
+        mass  = "if you want to send message to @0 you can click all-chatters and select @0 then send your commmand to him";
+        help = true;
+    }
+
+    (triggered, kicked, warns, help ,mass)
 }
 fn ban_imposters(tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
     let (bot_active, remove_name) = unsafe { (BOT_ACTIVE, REMOVE_NAME || BOT_ACTIVE) };
