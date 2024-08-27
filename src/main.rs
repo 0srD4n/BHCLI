@@ -1970,15 +1970,19 @@ fn process_new_messages(
             if let Some((from, to_opt, msg)) = get_message(&new_msg.text, members_tag) {
                 *should_notify |= msg.contains(&format!("@{}", username)) 
                     || (to_opt.as_ref().map_or(false, |to| to == username) && msg != "!up");
+                
+                // Gunakan MutexGuard untuk mengakses users secara aman
+                let users_lock = users.lock().unwrap();
+                
+                // Pindahkan pemanggilan fungsi yang membutuhkan akses ke users ke dalam blok ini
+                dantcasilent(&from, &msg, tx, &users_lock);
 
-                unsafe {
-                    if BOT_ACTIVE {
-                        let users_lock = users.lock().unwrap();
-                        dantca_imps_proses(&from, &msg, tx, &users_lock);
-                        send_greeting(&tx,&users_lock);
-                    }
+                if unsafe { BOT_ACTIVE } {
+                    dantca_imps_proses(&from, &msg, tx, &users_lock);
+                    send_greeting(tx, &users_lock);
                 }
-                if !users.lock().unwrap().is_guest(&from) {
+                
+                if !users_lock.is_guest(&from) {
                     match msg.as_str() {
                         "dantcaoff!" => toggle_bot_active(false, tx, &from),
                         "dantcago!" => toggle_bot_active(true, tx, &from),
@@ -1987,7 +1991,12 @@ fn process_new_messages(
                         "reportdan!" => report_dantca(tx, &from),
                         _ => {}
                     }
-                }                        
+                }
+                
+                // Lepaskan MutexGuard setelah selesai menggunakannya
+                drop(users_lock);
+                
+                // Komentar: Fungsi selamat_dantca_greet dinonaktifkan
                 // selamat_dantca_greet(tx, &from);
             }
         }
@@ -2112,7 +2121,25 @@ fn check_bot_status(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
     let messtats = format!(" [color=#ffffff] {} == [/color] [ @{} ]", status_message, from);
     tx.send(PostType::Post(messtats, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
 }
-
+fn dantcasilent(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
+    let msg_lower = msg.to_lowercase();
+    let from_lower = from.to_lowercase();
+    
+    if let Some((_color, _username)) = users.guests.iter().find(|(_color, name)| name.to_lowercase() == from_lower) {
+        let username_to_kick = from_lower.clone();
+        let (kicked, warns, msgcopy) = silentkick(&msg_lower);
+        if kicked {
+            let msgkickec = format!("{} - > {}", username_to_kick, msgcopy);
+            // Kirim pesan ke anggota
+            tx.send(PostType::Post(msgkickec, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
+            
+            // Kirim perintah kick
+            tx.send(PostType::Kick(format!("Kicked by Dantca bot: {}", warns), username_to_kick.clone())).unwrap();
+            
+            // Tambahkan pengguna yang di-kick ke daftar
+        }
+    }
+}
 fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
     let msg_lower = msg.to_lowercase();
     let from_lower = from.to_lowercase();
@@ -2147,6 +2174,272 @@ let msh = format!("Hallo @{}, {}", from, message);
             tx.send(PostType::Post(msh, Some(SEND_TO_ALL.to_owned()))).unwrap();
         }
     }
+}
+fn silentkick(msg: &str) -> (bool, String, String) {
+    let mut kicked = false;
+    let mut warns = String::new();
+    let msgcopy = msg.to_lowercase();
+    
+
+    if msgcopy.contains("betting") &&
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Betting is frowned upon here".to_string();
+        kicked = true;
+    } if (msgcopy.contains("buy ") || msgcopy.contains("sell ")) && msgcopy.contains("gun") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Munitions and talk thereof is a ".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("porn") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("link ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("favorite ")
+            || msgcopy.contains("lookin ") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Porn is a ".to_string();
+        kicked = true;
+    }
+    
+    if msgcopy.contains("torture") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Torture is a ".to_string();
+        kicked = true;
+    }        
+    
+    if msgcopy.contains("cock ") && (!msgcopy.contains("cock.li")) &&
+        ( 
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        )
+    {
+        warns = "Poor taste".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("hack") && (msgcopy.contains(" fb ") || msgcopy.contains(" insta ") || msgcopy.contains(" twitter ") || msgcopy.contains(" facebook ") || msgcopy.contains(" instagram ")) &&
+        ( 
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+            || msgcopy.contains("how ")
+        ) 
+    {
+        warns = "Social Media Hacking is bad form ".to_string();
+        kicked = true;
+    }                 
+    if msgcopy.contains("cp ") && 
+        ( 
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "CP is a ".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("rape ") && 
+        ( 
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin ") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Rape is a ".to_string();
+        kicked = true;
+    }
+    if ( msgcopy.contains("loli") || msgcopy.contains("child") || msgcopy.contains("minor") ) && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("link ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        )
+    {
+        warns = "CSAM is a ".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("sex") && msgcopy.contains("cam") {
+        warns = "Sex Cams are poor taste".to_string();
+        kicked = true;
+    }                    
+    if ( msgcopy.contains("buy") || msgcopy.contains("sell") ) && ( msgcopy.contains("human") ) {
+        warns = "Human sales is poor taste".to_string();
+        kicked = true;
+    }                                            
+    if msgcopy.contains("market") && ( msgcopy.contains("black") || msgcopy.contains("under") ) {
+        warns = "Markets are bad, 98% are scams".to_string();
+        kicked = true;
+    }
+
+
+    if msgcopy.contains("p5hwh3fxfb4x22rpmgq32c3xps6g6k6rvmualzj4gwvxs5ovjhbd4fyd.onion") {
+        warns = "We don't like your link.".to_string();
+        kicked = true;
+    } 
+
+    if ( msgcopy.contains("hitman") || msgcopy.contains("hitmen") ) && 
+        (     
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Hitmen have nothing to do with us LOL".to_string();
+        kicked = true;
+    }        
+    if msgcopy.contains("nogg") || msgcopy.contains("niqq") || msgcopy.contains("nigg") || msgcopy.contains("nigga") || msgcopy.contains("nigge") || msgcopy.contains("niggo") || msgcopy.contains("niggi") || msgcopy.contains("niggu")  {
+        warns = "Offensive terms are bad form.".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("indian") &&
+        ( 
+            msgcopy.contains("ni") ||
+            msgcopy.contains("shit") ||
+            msgcopy.contains("fuck") 
+        ) 
+    {
+        warns = "Racial Insults won't be tolerated.".to_string();
+        kicked = true;
+    }             
+    if msgcopy.contains("bomb ") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")            
+        ) 
+    {
+        warns = "Munitions is a ".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("database") || msgcopy.contains("db") && msgcopy.contains("dump") &&
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Databases are not us. Be gone.".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("paypal") && msgcopy.contains("transfer") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Paypal - not here PAL! Be gone.".to_string();
+        kicked = true;
+    }
+    if (msgcopy.contains("cc ") || msgcopy.contains("credit ") || msgcopy.contains("card ")) && 
+        (
+            msgcopy.contains("make") || 
+            msgcopy.contains("dump") ||
+            msgcopy.contains("where") || 
+            msgcopy.contains("want") || 
+            msgcopy.contains("lookin") || 
+            msgcopy.contains("know") ||         		
+            msgcopy.contains("have") ||
+            msgcopy.contains("sell") ||
+            msgcopy.contains("share") ||
+            msgcopy.contains("buy")
+        ) 
+    {
+        warns = "Carding is a".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("tabularis") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Tabularis - not here! Be gone... BYE BYE...".to_string();
+        kicked = true;
+    }
+    // fuck logic
+    if (msgcopy.contains("fuck") || msgcopy.contains("fucking") || msgcopy.contains("fucks")) && 
+    (msgcopy.contains("all" )
+     || msgcopy.contains("everyone") 
+     || msgcopy.contains("everybody")
+      || msgcopy.contains("members") 
+      || msgcopy.contains("staff")
+       || msgcopy.contains("admin")){
+        warns = "dont used a bad word ~dantca bot".to_string();
+        kicked = true;
+    }
+    // satu kata  logic kicked
+    match msgcopy.as_str() {
+        "porn" | "child porn" | "cp" | "gore" | "fuck" | "carding" | "horny" | "bitch" | "cock" | "cocaine" => {
+            // Pesan peringatan untuk konten yang tidak pantas
+            warns = "Bye Bye !!kicked by dantca bot".to_string();
+            kicked = true;
+        },
+        _ => {}
+    }
+ 
+    (kicked, warns, msgcopy)
 }
 
 fn check_message_content(msg: &str) -> (bool, bool, &str, bool, &str) {
