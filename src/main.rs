@@ -1973,10 +1973,11 @@ fn process_new_messages(
                 
                 // Gunakan MutexGuard untuk mengakses users secara aman
                 let users_lock = users.lock().unwrap();
+                let rt = tokio::runtime::Runtime::new().unwrap();
                 
                 // Pindahkan pemanggilan fungsi yang membutuhkan akses ke users ke dalam blok ini
                 dantcasilent(&from, &msg, tx, &users_lock);
-
+                rt.block_on(async { gemini(tx, &from, &msg).await });
                 if unsafe { BOT_ACTIVE } {
                     dantca_imps_proses(&from, &msg, tx, &users_lock);
                     send_greeting(tx, &users_lock);
@@ -1998,6 +1999,31 @@ fn process_new_messages(
                 
                 // Komentar: Fungsi selamat_dantca_greet dinonaktifkan
                 // selamat_dantca_greet(tx, &from);
+            }
+        }
+    }
+}
+use ask_gemini::Gemini;
+    
+async fn gemini(tx: &crossbeam_channel::Sender<PostType>, from: &str, msg: &str) {
+    if msg.contains("askdan?") {
+        let gemini = Gemini::new(Some("AIzaSyAq6mTxrfAGnN51U_wVLlvbPenAvVTKeMU"), None);
+        
+        let question = msg.replace("askdan?", "").trim().to_string();
+        
+        match gemini.ask(&question).await {
+            Ok(response) => {
+                let message = format!("Dantca = > hallo, @{} there the answare from me ->", from);
+                // Ubah cara memproses response karena sekarang response adalah Vec<String>
+                let plain_response = response.join(" ").replace(|c: char| !c.is_alphanumeric() && c != ' ', "");
+                let plain_message = format!("{} {}", message, plain_response);
+                tx.send(PostType::Post(plain_message, Some(.to_owned()))).unwrap();
+            },
+            Err(e) => {
+                let error_message = format!(" error message repson from {}", from);
+                let plain_error = e.to_string().replace(|c: char| !c.is_alphanumeric() && c != ' ', "");
+                let plain_error_message = format!("{} {}", error_message, plain_error);
+                tx.send(PostType::Post(plain_error_message, Some(SEND_TO_ALL.to_owned()))).unwrap();
             }
         }
     }
@@ -2053,6 +2079,7 @@ fn process_new_messages(
         name: String,
         violation: String,
     }
+    
 
 // fungsi untuk melakukan kicked user di processe message
     fn report_dantca(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
@@ -3887,6 +3914,9 @@ fn get_date_style(m: &Message) -> Style {
         (true, _) => Style::default().fg(tuiColor::Red),
     }
 }
+// Komentar: Fungsi ini perlu dipanggil di tempat yang sesuai dalam kode Anda,
+// mungkin di dalam loop utama atau handler pesan
+
 
 fn render_users(f: &mut Frame<CrosstermBackend<io::Stdout>>, r: Rect, users: &Arc<Mutex<Users>>) {
     let users = users.lock().unwrap();
@@ -4207,3 +4237,4 @@ mod tests {
         assert_eq!(lines.len(), 2);
     }
 }
+

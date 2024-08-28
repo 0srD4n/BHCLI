@@ -39,3 +39,5 @@ textwrap = "0.16.0"
 toml = "0.7.3"
 tui = { version = "0.19.0", features = ["crossterm"], default-features = false }
 unicode-width = "0.1.10"
+ask_gemini = "0.1.4"
+tokio = "1.39.3"
