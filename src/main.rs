@@ -1992,6 +1992,11 @@ fn process_new_messages(
                         "reportdan!" => report_dantca(tx, &from),
                         _ => {}
                     }
+                }else if users_lock.is_guest(&from){
+match msg.as_str() {
+    "danhelp!" => dantca_guest_proses(&from, tx),
+    _ => {}
+}
                 }
                 
                 // Lepaskan MutexGuard setelah selesai menggunakannya
@@ -2006,28 +2011,96 @@ fn process_new_messages(
 use ask_gemini::Gemini;
     
 async fn gemini(tx: &crossbeam_channel::Sender<PostType>, from: &str, msg: &str) {
-    if msg.contains("askdan?") {
+    const MAX_RESPONSE_LENGTH: usize = 500; // Batasan panjang respons
+
+    if msg.contains("askdan?") && msg.contains("/pm") {
         let gemini = Gemini::new(Some("AIzaSyAq6mTxrfAGnN51U_wVLlvbPenAvVTKeMU"), None);
         
-        let question = msg.replace("askdan?", "").trim().to_string();
+        let question = msg.replace("askdan?", "").replace("/pm", "").trim().to_string();
         
         match gemini.ask(&question).await {
             Ok(response) => {
-                let message = format!("Dantca = > hallo, @{} there the answare from me ->", from);
+                let message = format!("Dantca => hallo, @{} there the answer from me ->", from);
                 // Ubah cara memproses response karena sekarang response adalah Vec<String>
-                let plain_response = response.join(" ").replace(|c: char| !c.is_alphanumeric() && c != ' ', "");
-                let plain_message = format!("{} {}", message, plain_response);
-                tx.send(PostType::Post(plain_message, Some(.to_owned()))).unwrap();
+                let plain_response = response.join(" ")
+                    .replace(|c: char| !c.is_alphanumeric() && c != ' ', "")
+                    .chars().take(MAX_RESPONSE_LENGTH).collect::<String>();
+                let plain_message = format!("[color=#ffffff]{}\n{}[/color]", message, plain_response);
+                // Kirim pesan secara private ke pengirim
+                tx.send(PostType::Post(plain_message, Some(from.to_owned()))).unwrap();
             },
             Err(e) => {
-                let error_message = format!(" error message repson from {}", from);
-                let plain_error = e.to_string().replace(|c: char| !c.is_alphanumeric() && c != ' ', "");
+                let error_message = format!("Error message response from {}", from);
+                let plain_error = e.to_string()
+                    .replace(|c: char| !c.is_alphanumeric() && c != ' ', "")
+                    .chars().take(MAX_RESPONSE_LENGTH).collect::<String>();
                 let plain_error_message = format!("{} {}", error_message, plain_error);
-                tx.send(PostType::Post(plain_error_message, Some(SEND_TO_ALL.to_owned()))).unwrap();
+                tx.send(PostType::Post(plain_error_message, Some(from.to_owned()))).unwrap();
             }
+        }
+    } else if msg.contains("askdan?") && msg.contains("public") && msg.contains("/") {
+        // Implementasi untuk pesan publik dengan batasan panjang
+        process_public_message(tx, from, msg, MAX_RESPONSE_LENGTH).await;
+    } else if msg.contains("askdan?") && msg.contains("members") && msg.contains("/") {
+        // Implementasi untuk pesan anggota dengan batasan panjang
+        process_members_message(tx, from, msg, MAX_RESPONSE_LENGTH).await;
+    }
+}
+
+async fn process_public_message(tx: &crossbeam_channel::Sender<PostType>, from: &str, msg: &str, max_length: usize) {
+    let gemini = Gemini::new(Some("AIzaSyAq6mTxrfAGnN51U_wVLlvbPenAvVTKeMU"), None);
+    
+    let question = msg.replace("askdan?", "").replace("public", "").trim().to_string();
+    
+    match gemini.ask(&question).await {
+        Ok(response) => {
+            let message = format!("Dantca => Halo All, question from @{} -> there my answare:", from);
+            // Proses response dan batasi panjangnya
+            let plain_response = response.join(" ")
+                .replace(|c: char| !c.is_alphanumeric() && c != ' ' && !c.is_ascii_punctuation(), "")
+                .chars().take(max_length).collect::<String>();
+            let plain_message = format!("[color=#ffffff]{}\n{}\n{}[/color]", message, question, plain_response);
+            // Kirim pesan ke semua pengguna
+            tx.send(PostType::Post(plain_message, Some(SEND_TO_ALL.to_owned()))).unwrap();
+        },
+        Err(e) => {
+            let error_message = format!("Error {}", from);
+            let plain_error = e.to_string()
+                .replace(|c: char| !c.is_alphanumeric() && c != ' ', "")
+                .chars().take(max_length).collect::<String>();
+            let plain_error_message = format!("{}: {}", error_message, plain_error);
+            tx.send(PostType::Post(plain_error_message, Some(SEND_TO_ALL.to_owned()))).unwrap();
         }
     }
 }
+
+async fn process_members_message(tx: &crossbeam_channel::Sender<PostType>, from: &str, msg: &str, max_length: usize) {
+    let gemini = Gemini::new(Some("AIzaSyAq6mTxrfAGnN51U_wVLlvbPenAvVTKeMU"), None);
+    
+    let question = msg.replace("askdan?", "").replace("members", "").trim().to_string();
+    
+    match gemini.ask(&question).await {
+        Ok(response) => {
+            let message = format!("Dantca => Halo Members, @{} there my answare ->:", from);
+            // Proses response dan batasi panjangnya
+            let plain_response = response.join(" ")
+            .replace(|c: char| !c.is_alphanumeric() && c != ' ' && !c.is_ascii_punctuation(), "")
+            .chars().take(max_length).collect::<String>();
+            let plain_message = format!("[color=#ffffff]{}\n{}\n{}[/color]", message, question, plain_response);
+            // Kirim pesan hanya ke anggota (implementasi pengiriman ke anggota perlu ditambahkan)
+            tx.send(PostType::Post(plain_message, Some("MEMBERS_ONLY".to_owned()))).unwrap();
+        },
+        Err(e) => {
+            let error_message = format!("Error message response from {}", from);
+            let plain_error = e.to_string()
+                .replace(|c: char| !c.is_alphanumeric() && c != ' ', "")
+                .chars().take(max_length).collect::<String>();
+            let plain_error_message = format!("{}: {}", error_message, plain_error);
+            tx.send(PostType::Post(plain_error_message, Some("MEMBERS_ONLY".to_owned()))).unwrap();
+        }
+    }
+}
+
 // fn initialize_and_greet_users(tx: crossbeam_channel::Sender<PostType>, users: Arc<Mutex<Users>>) {
 //     // Simpan data pengguna awal
 //     let initial_users = Arc::new(Mutex::new(HashMap::new()));
@@ -2114,11 +2187,30 @@ fn dantca_help(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
     dantcaoff! = Deactive Dantca Bot
     statusdan! = Check Dantca Bot Status
     dantcahelp! = Dantca Bot Help
-    reportdan! = for report kicked user", from);
+    reportdan! = for report kicked user
+    /public askdan-? = ask dantca bot for something but public
+    /pm askdan-? = ask dantca bot for something but members
+   /members askdan-? = ask dantca bot for something but members
+    danhelp! = for guest
+    without (-)
+    ", from);
     tx.send(PostType::Post(help_message, Some(SEND_TO_MEMBERS.to_owned())
     )).unwrap();
 
 }
+fn dantca_guest_proses(from: &str, tx: &crossbeam_channel::Sender<PostType>) { 
+    let msg_help = format!("
+    [color=#ffffff]
+    Hallo @{}, there is guide for Dantca bot ai
+    /pm askdan-? = ask dantca bot for something on the pm
+    /public askdan-? = ask dantca bot for something but public
+    /danhelp! = for guest guide bot dantca
+    without (-)
+    [/color]
+    ", from);
+    tx.send(PostType::Post(msg_help, Some(SEND_TO_ALL.to_owned()))).unwrap();  
+    }
+
 // Fungsi untuk mengatur BOT_ACTIVE dan REMOVE_NAME
 
 fn toggle_bot_active(active: bool, tx: &crossbeam_channel::Sender<PostType>, from: &str) {
