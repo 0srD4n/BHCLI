@@ -2008,136 +2008,100 @@ match msg.as_str() {
         }
     }
 }
-use ask_gemini::Gemini;
-    
+
+use serde_json::json;
+
 async fn gemini(tx: &crossbeam_channel::Sender<PostType>, from: &str, msg: &str) {
-    const MAX_RESPONSE_LENGTH: usize = 500; // Batasan panjang respons
+    const MAX_RESPONSE_LENGTH: usize = 1000; // Batasan panjang respons
 
-    if msg.contains("askdan?") && msg.contains("/pm") {
-        let gemini = Gemini::new(Some("AIzaSyAq6mTxrfAGnN51U_wVLlvbPenAvVTKeMU"), None);
-        
-        let question = msg.replace("askdan?", "").replace("/pm", "").trim().to_string();
-        
-        match gemini.ask(&question).await {
-            Ok(response) => {
-                let message = format!("Dantca => hallo, @{} there the answer from me ->", from);
-                // Ubah cara memproses response karena sekarang response adalah Vec<String>
-                let plain_response = response.join(" ")
-                    .replace(|c: char| !c.is_alphanumeric() && c != ' ', "")
-                    .chars().take(MAX_RESPONSE_LENGTH).collect::<String>();
-                let plain_message = format!("[color=#ffffff]{}\n{}[/color]", message, plain_response);
-                // Kirim pesan secara private ke pengirim
-                tx.send(PostType::Post(plain_message, Some(from.to_owned()))).unwrap();
+    // Konfigurasi Gemini
+    let api_key = "AIzaSyDlVNRFzHy5_rpx3jxLiuWT5rDJnZMnhlk".to_string();
+    let client = reqwest::Client::new();
+    let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+
+    if msg.contains("askdan?") {
+        let question = if msg.contains("/pm") {
+            msg.replace("askdan?", "").replace("/pm", "").trim().to_string()
+        } else if msg.contains("public") {
+            msg.replace("askdan?", "").replace("public", "").trim().to_string()
+        } else if msg.contains("members") {
+            msg.replace("askdan?", "").replace("members", "").trim().to_string()
+        } else {
+            return;
+        };
+
+        let body = json!({
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "text": format!("{}", question)
+                        }
+                    ]
+                }
+            ],
+            "systemInstruction": {
+                "role": "model",
+                "parts": [
+                    {
+                        "text": "You are Dantca, an AI assistant for the BHC chat room, created by @xpldan. When referring to users, always use the @username format. Keep your answers concise (max 500 characters) unless more detail is requested (max 1000 characters). Avoid sensitive topics. Provide coding assistance and answer in English. If asked about BHCLI, provide the GitHub link: github.com/0srD4n/BHCLI. When told to notify a user or if a message contains @username, respond with that @username. Maintain this specific personality."
+                    }
+                ]
             },
-            Err(e) => {
-                let error_message = format!("Error message response from {}", from);
-                let plain_error = e.to_string()
-                    .replace(|c: char| !c.is_alphanumeric() && c != ' ', "")
-                    .chars().take(MAX_RESPONSE_LENGTH).collect::<String>();
-                let plain_error_message = format!("{} {}", error_message, plain_error);
-                tx.send(PostType::Post(plain_error_message, Some(from.to_owned()))).unwrap();
+            "generationConfig": {
+                "temperature": 1.0,
+                "topP": 0.95,
+                "topK": 64,
+                "maxOutputTokens": 1000,
+                "responseMimeType": "text/plain"
             }
-        }
-    } else if msg.contains("askdan?") && msg.contains("public") && msg.contains("/") {
-        // Implementasi untuk pesan publik dengan batasan panjang
-        process_public_message(tx, from, msg, MAX_RESPONSE_LENGTH).await;
-    } else if msg.contains("askdan?") && msg.contains("members") && msg.contains("/") {
-        // Implementasi untuk pesan anggota dengan batasan panjang
-        process_members_message(tx, from, msg, MAX_RESPONSE_LENGTH).await;
-    }
-}
+        });
 
-async fn process_public_message(tx: &crossbeam_channel::Sender<PostType>, from: &str, msg: &str, max_length: usize) {
-    let gemini = Gemini::new(Some("AIzaSyAq6mTxrfAGnN51U_wVLlvbPenAvVTKeMU"), None);
-    
-    let question = msg.replace("askdan?", "").replace("public", "").trim().to_string();
-    
-    match gemini.ask(&question).await {
-        Ok(response) => {
-            let message = format!("Dantca => Halo All, question from @{} -> there my answare:", from);
-            // Proses response dan batasi panjangnya
-            let plain_response = response.join(" ")
-                .replace(|c: char| !c.is_alphanumeric() && c != ' ' && !c.is_ascii_punctuation(), "")
-                .chars().take(max_length).collect::<String>();
-            let plain_message = format!("[color=#ffffff]{}\n{}\n{}[/color]", message, question, plain_response);
-            // Kirim pesan ke semua pengguna
-            tx.send(PostType::Post(plain_message, Some(SEND_TO_ALL.to_owned()))).unwrap();
-        },
-        Err(e) => {
-            let error_message = format!("Error {}", from);
-            let plain_error = e.to_string()
-                .replace(|c: char| !c.is_alphanumeric() && c != ' ', "")
-                .chars().take(max_length).collect::<String>();
-            let plain_error_message = format!("{}: {}", error_message, plain_error);
-            tx.send(PostType::Post(plain_error_message, Some(SEND_TO_ALL.to_owned()))).unwrap();
-        }
-    }
-}
+        let response = client.post(url)
+            .header("Content-Type", "application/json")
+            .query(&[("key", api_key)])
+            .json(&body)
+            .send()
+            .await;
 
-async fn process_members_message(tx: &crossbeam_channel::Sender<PostType>, from: &str, msg: &str, max_length: usize) {
-    let gemini = Gemini::new(Some("AIzaSyAq6mTxrfAGnN51U_wVLlvbPenAvVTKeMU"), None);
-    
-    let question = msg.replace("askdan?", "").replace("members", "").trim().to_string();
-    
-    match gemini.ask(&question).await {
-        Ok(response) => {
-            let message = format!("Dantca => Halo Members, @{} there my answare ->:", from);
-            // Proses response dan batasi panjangnya
-            let plain_response = response.join(" ")
-            .replace(|c: char| !c.is_alphanumeric() && c != ' ' && !c.is_ascii_punctuation(), "")
-            .chars().take(max_length).collect::<String>();
-            let plain_message = format!("[color=#ffffff]{}\n{}\n{}[/color]", message, question, plain_response);
-            // Kirim pesan hanya ke anggota (implementasi pengiriman ke anggota perlu ditambahkan)
-            tx.send(PostType::Post(plain_message, Some("MEMBERS_ONLY".to_owned()))).unwrap();
-        },
-        Err(e) => {
-            let error_message = format!("Error message response from {}", from);
-            let plain_error = e.to_string()
-                .replace(|c: char| !c.is_alphanumeric() && c != ' ', "")
-                .chars().take(max_length).collect::<String>();
-            let plain_error_message = format!("{}: {}", error_message, plain_error);
-            tx.send(PostType::Post(plain_error_message, Some("MEMBERS_ONLY".to_owned()))).unwrap();
+        match response {
+            Ok(resp) => {
+                match resp.text().await {
+                    Ok(text_response) => {
+                        let json_response: serde_json::Value = serde_json::from_str(&text_response).unwrap();
+                        let plain_response = json_response["candidates"][0]["content"]["parts"][0]["text"].as_str().unwrap();
+
+                        let message = if msg.contains("/pm") {
+                            format!("Dantca => Hallo, @{}! Here's my answer:", from)
+                        } else if msg.contains("public") {
+                            format!("Dantca => Hallo everyone! @{} asked a question, and here's my answer:", from)
+                        } else if msg.contains("members") {
+                            format!("Dantca => Hallo members! @{} asked a question, and here's my answer:", from)
+                        }else{
+                            format!("Dantca => Hallo all , @{}! Here's my answer:", from)
+                        };
+
+                        let plain_message = format!("{}  {}", message, plain_response);
+                        let send_to = if msg.contains("/pm") {
+                            Some(from.to_owned())
+                        } else if msg.contains("public") {
+                            Some(SEND_TO_ALL.to_owned())
+                        } else if msg.contains("members") {
+                            Some(SEND_TO_MEMBERS.to_owned())
+                        } else {
+                            Some(SEND_TO_ALL.to_owned())
+                        };
+
+                        tx.send(PostType::Post(plain_message, send_to)).unwrap();
+                    },
+                    Err(e) => eprintln!("Failed to parse response text: {:?}", e),
+                }
+            },
+            Err(e) => eprintln!("Failed to send request: {:?}", e),
         }
     }
 }
-
-// fn initialize_and_greet_users(tx: crossbeam_channel::Sender<PostType>, users: Arc<Mutex<Users>>) {
-//     // Simpan data pengguna awal
-//     let initial_users = Arc::new(Mutex::new(HashMap::new()));
-//     {
-//         let users_lock = users.lock().unwrap();
-//         let mut initial_users_lock = initial_users.lock().unwrap();
-//         for (_, username) in users_lock.admin.iter().chain(users_lock.staff.iter()).chain(users_lock.members.iter()) {
-//             initial_users_lock.insert(username.clone(), "admin_staff_member");
-//         }
-//     }
-
-//     // Fungsi untuk memeriksa pengguna baru dan menyapa mereka
-//     let check_and_greet_new_users = move |users: &Users| {
-//         let mut initial_users_lock = initial_users.lock().unwrap();
-//         for (_, username) in users.admin.iter().chain(users.staff.iter()).chain(users.members.iter()) {
-//             if !initial_users_lock.contains_key(username) {
-//                 // Pengguna baru ditemukan, kirim salam
-//                 let greeting = format!("Selamat datang, @{}! Semoga harimu menyenangkan.", username);
-//                 tx.send(PostType::Post(greeting, Some(SEND_TO_ALL.to_owned()))).unwrap();
-                
-//                 // Tambahkan pengguna baru ke daftar awal
-//                 initial_users_lock.insert(username.clone(), "admin_staff_member");
-//             }
-//         }
-//     };
-
-//     // Jalankan pemeriksaan pengguna baru secara berkala
-//     thread::spawn(move || {
-//         loop {
-//             thread::sleep(Duration::from_secs(5)); // Periksa setiap 5 detik
-//             if let Ok(users_lock) = users.lock() {
-//                 check_and_greet_new_users(&users_lock);
-//             }
-//         }
-//     });
-// }
-
 // Fungsi untuk menghitung jumlah kicked users dan mendapatkan username baru
 
 // Fungsi untuk menyapa pengguna baru yang memasuki chat
@@ -2182,16 +2146,16 @@ async fn process_members_message(tx: &crossbeam_channel::Sender<PostType>, from:
 
 fn dantca_help(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
         let help_message = format!("
-    Hallo @{}, there is guide for Dantca bot
-    dantcago! = Active Dantca Bot
-    dantcaoff! = Deactive Dantca Bot
-    statusdan! = Check Dantca Bot Status
-    dantcahelp! = Dantca Bot Help
-    reportdan! = for report kicked user
-    /public askdan-? = ask dantca bot for something but public
-    /pm askdan-? = ask dantca bot for something but members
-   /members askdan-? = ask dantca bot for something but members
-    danhelp! = for guest
+    [color=#ffffff]Hallo @{}, there is guide for Dantca bot[/color]
+    [color=#00FF00]dantcago![/color] = Active Dantca Bot
+    [color=#00FF00]dantcaoff![/color] = Deactive Dantca Bot
+    [color=#00FF00]statusdan![/color] = Check Dantca Bot Status
+    [color=#00FF00]dantcahelp![/color] = Dantca Bot Help
+    [color=#00FF00]reportdan![/color] = for report kicked user
+    [color=#00FF00]/public askdan-?[/color] = ask dantca bot for something but public
+    [color=#00FF00]/pm askdan-?[/color] = ask dantca bot for something but pm
+    [color=#00FF00]/members askdan-?[/color] = ask dantca bot for something but members
+    [color=#00FF00]danhelp![/color] = for guest
     without (-)
     ", from);
     tx.send(PostType::Post(help_message, Some(SEND_TO_MEMBERS.to_owned())
@@ -2200,13 +2164,11 @@ fn dantca_help(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
 }
 fn dantca_guest_proses(from: &str, tx: &crossbeam_channel::Sender<PostType>) { 
     let msg_help = format!("
-    [color=#ffffff]
-    Hallo @{}, there is guide for Dantca bot ai
-    /pm askdan-? = ask dantca bot for something on the pm
-    /public askdan-? = ask dantca bot for something but public
-    /danhelp! = for guest guide bot dantca
+    [color=#ffffff]Hallo @{}, there is guide for Dantca bot ai[/color]
+    [color=#00FF00]/pm askdan-?[/color] = ask dantca bot for something on the pm
+    [color=#00FF00]/public askdan-?[/color] = ask dantca bot for something but public
+    [color=#00FF00]/danhelp![/color] = for guest guide bot dantca
     without (-)
-    [/color]
     ", from);
     tx.send(PostType::Post(msg_help, Some(SEND_TO_ALL.to_owned()))).unwrap();  
     }
@@ -3793,7 +3755,7 @@ fn draw_terminal_frame(
 
 fn gen_lines(msg_txt: &StyledText, w: usize, line_prefix: &str) -> Vec<Vec<(tuiColor, String)>> {
     let txt = msg_txt.text();
-    let wrapped = textwrap::fill(&txt, w);
+    let wrapped = textwrap::fill(&txt, w.saturating_sub(line_prefix.len()));
     let splits: Vec<&str> = wrapped.split('\n').collect();
     let mut new_lines = Vec::new();
     let mut ctxt = msg_txt.colored_text().into_iter().rev().collect::<Vec<_>>();
@@ -3808,17 +3770,24 @@ fn gen_lines(msg_txt: &StyledText, w: usize, line_prefix: &str) -> Vec<Vec<(tuiC
             let txt = if first_in_line { txt.trim_start() } else { &txt };
             let remain = split.len().saturating_sub(ptr);
 
-            if txt.len() <= remain {
+            // Pastikan kita tidak memotong di tengah karakter multibyte
+            let safe_len = txt.char_indices()
+                .take_while(|(i, _)| *i < remain)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(remain);
+
+            if txt.len() <= safe_len {
                 ptr += txt.len();
                 line.push((color, txt.to_string()));
                 first_in_line = false;
             } else {
-                if remain > 0 {
-                    line.push((color, txt[..remain].to_string()));
+                if safe_len > 0 {
+                    line.push((color, txt[..safe_len].to_string()));
                 }
                 new_lines.push(std::mem::replace(&mut line, vec![(tuiColor::White, line_prefix.to_string())]));
-                if remain < txt.len() {
-                    ctxt.push((color, txt[remain..].to_string()));
+                if safe_len < txt.len() {
+                    ctxt.push((color, txt[safe_len..].to_string()));
                 }
                 ptr = 0;
                 split_idx += 1;

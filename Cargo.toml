@@ -27,7 +27,7 @@ log = "0.4.17"
 log4rs = "1.2.0"
 rand = "0.8.5"
 regex = "1.8.1"
-reqwest = { version = "0.11.17", features = ["blocking", "cookies", "socks", "multipart"] }
+reqwest = { version = "0.11.17", features = ["blocking", "cookies", "socks", "multipart", "json"] }
 rodio = "0.17.1"
 rpassword = "7.2.0"
 select = "0.6.0"
@@ -41,3 +41,4 @@ tui = { version = "0.19.0", features = ["crossterm"], default-features = false }
 unicode-width = "0.1.10"
 ask_gemini = "0.1.4"
 tokio = "1.39.3"
+gemini = "0.0.5"
