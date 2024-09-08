@@ -71,6 +71,7 @@ const SEND_TO_ADMINS: &str = "s _";
 const SOUND1: &[u8] = include_bytes!("sound1.mp3");
 const XPLDAN: &str = "XplDan";
 const SERVER_DOWN_500_ERR: &str = "500 Internal Server Error, server down";
+static mut SILENTKICK : bool = false;
 const SERVER_DOWN_ERR: &str = "502 Bad Gateway, server down";
 const KICKED_ERR: &str = "You have been kicked";
 const REG_ERR: &str = "This nickname is a registered member";
@@ -684,6 +685,7 @@ impl LeChatPHPClient {
             }
         }
     }
+
     fn handle_long_message_mode_key_event(
         &mut self,
         app: &mut App,
@@ -1974,15 +1976,23 @@ fn process_new_messages(
                 // Gunakan MutexGuard untuk mengakses users secara aman
                 let users_lock = users.lock().unwrap();
                 let rt = tokio::runtime::Runtime::new().unwrap();
-                
+                if unsafe { SILENTKICK } {
+                    dantcasilent(&from, &msg, tx, &users_lock);
+                }
                 // Pindahkan pemanggilan fungsi yang membutuhkan akses ke users ke dalam blok ini
-                dantcasilent(&from, &msg, tx, &users_lock);
-                rt.block_on(async { gemini(tx, &from, &msg).await });
+                                rt.block_on(async { gemini(tx, &from, &msg).await });
                 if unsafe { BOT_ACTIVE } {
                     dantca_imps_proses(&from, &msg, tx, &users_lock);
                     send_greeting(tx, &users_lock);
                 }
-                
+                // Memeriksa dan mengatur status BOT_ACTIVE dan SILENTKICK
+                unsafe {
+                    if SILENTKICK {
+                        BOT_ACTIVE = false;
+                    } else if BOT_ACTIVE {
+                        SILENTKICK = false;
+                    }
+                }
                 if !users_lock.is_guest(&from) {
                     match msg.as_str() {
                         "dantcaoff!" => toggle_bot_active(false, tx, &from),
@@ -2008,100 +2018,113 @@ match msg.as_str() {
         }
     }
 }
-
+use reqwest::blocking::Client as OtherClient;
 use serde_json::json;
+use tokio::time::timeout;
+
+const API_KEY: &str = "AIzaSyDlVNRFzHy5_rpx3jxLiuWT5rDJnZMnhlk";
+const MAX_RESPONSE_LENGTH: usize = 1000;
+const API_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn gemini(tx: &crossbeam_channel::Sender<PostType>, from: &str, msg: &str) {
-    const MAX_RESPONSE_LENGTH: usize = 1000; // Batasan panjang respons
+    if !msg.contains("askdan?") {
+        return;
+    }
 
-    // Konfigurasi Gemini
-    let api_key = "AIzaSyDlVNRFzHy5_rpx3jxLiuWT5rDJnZMnhlk".to_string();
-    let client = reqwest::Client::new();
-    let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+    let client = OtherClient::new();
+    let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b-exp-0827:generateContent";
 
-    if msg.contains("askdan?") {
-        let question = if msg.contains("/pm") {
-            msg.replace("askdan?", "").replace("/pm", "").trim().to_string()
-        } else if msg.contains("public") {
-            msg.replace("askdan?", "").replace("public", "").trim().to_string()
-        } else if msg.contains("members") {
-            msg.replace("askdan?", "").replace("members", "").trim().to_string()
-        } else {
-            return;
-        };
+    let question = extract_question(msg);
+    let body = create_request_body(&question);
 
-        let body = json!({
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [
-                        {
-                            "text": format!("{}", question)
-                        }
-                    ]
-                }
-            ],
-            "systemInstruction": {
-                "role": "model",
-                "parts": [
-                    {
-                        "text": "You are Dantca, an AI assistant for the BHC chat room, created by @xpldan. When referring to users, always use the @username format. Keep your answers concise (max 500 characters) unless more detail is requested (max 1000 characters). Avoid sensitive topics. Provide coding assistance and answer in English. If asked about BHCLI, provide the GitHub link: github.com/0srD4n/BHCLI. When told to notify a user or if a message contains @username, respond with that @username. Maintain this specific personality."
-                    }
-                ]
-            },
-            "generationConfig": {
-                "temperature": 1.0,
-                "topP": 0.95,
-                "topK": 64,
-                "maxOutputTokens": 1000,
-                "responseMimeType": "text/plain"
-            }
-        });
-
-        let response = client.post(url)
-            .header("Content-Type", "application/json")
-            .query(&[("key", api_key)])
-            .json(&body)
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) => {
-                match resp.text().await {
-                    Ok(text_response) => {
-                        let json_response: serde_json::Value = serde_json::from_str(&text_response).unwrap();
-                        let plain_response = json_response["candidates"][0]["content"]["parts"][0]["text"].as_str().unwrap();
-
-                        let message = if msg.contains("/pm") {
-                            format!("Dantca => Hallo, @{}! Here's my answer:", from)
-                        } else if msg.contains("public") {
-                            format!("Dantca => Hallo everyone! @{} asked a question, and here's my answer:", from)
-                        } else if msg.contains("members") {
-                            format!("Dantca => Hallo members! @{} asked a question, and here's my answer:", from)
-                        }else{
-                            format!("Dantca => Hallo all , @{}! Here's my answer:", from)
-                        };
-
-                        let plain_message = format!("{}  {}", message, plain_response);
-                        let send_to = if msg.contains("/pm") {
-                            Some(from.to_owned())
-                        } else if msg.contains("public") {
-                            Some(SEND_TO_ALL.to_owned())
-                        } else if msg.contains("members") {
-                            Some(SEND_TO_MEMBERS.to_owned())
-                        } else {
-                            Some(SEND_TO_ALL.to_owned())
-                        };
-
-                        tx.send(PostType::Post(plain_message, send_to)).unwrap();
-                    },
-                    Err(e) => eprintln!("Failed to parse response text: {:?}", e),
-                }
-            },
-            Err(e) => eprintln!("Failed to send request: {:?}", e),
-        }
+    // Use timeout for the API request
+    match timeout(API_TIMEOUT, send_request(&client, url, &body)).await {
+        Ok(result) => match result {
+            Ok(response) => handle_response(response, tx, from, msg).await,
+            Err(e) => eprintln!("Error sending request: {:?}", e),
+        },
+        Err(_) => eprintln!("API request timed out"),
     }
 }
+
+fn extract_question(msg: &str) -> String {
+    let mut question = msg.replace("askdan?", "").trim().to_string();
+    for keyword in &["/pm", "public", "members"] {
+        question = question.replace(keyword, "").trim().to_string();
+    }
+    question
+}
+
+fn create_request_body(question: &str) -> serde_json::Value {
+    json!({
+        "contents": [{
+            "role": "user",
+            "parts": [{"text": question}]
+        }],
+        "systemInstruction": {
+            "role": "model",
+            "parts": [{
+                "text": "You are Dantca, an AI assistant for the BHC chat room, created by @xpldan..."
+            }]
+        },
+        "generationConfig": {
+            "temperature": 1.0,
+            "topP": 0.95,
+            "topK": 64,
+            "maxOutputTokens": MAX_RESPONSE_LENGTH,
+            "responseMimeType": "text/plain"
+        }
+    })
+}
+
+async fn send_request(client: &OtherClient, url: &str, body: &serde_json::Value) -> Result<String, reqwest::Error> {
+    let response = client.post(url)
+        .header("Content-Type", "application/json")
+        .query(&[("key", API_KEY)])
+        .json(body)
+        .send()?
+        .text(); // Corrected to use the `?` operator to handle the `Result` value
+    Ok(response?)
+}
+
+async fn handle_response(response: String, tx: &crossbeam_channel::Sender<PostType>, from: &str, msg: &str) {
+    match serde_json::from_str::<serde_json::Value>(&response) {
+        Ok(json_response) => {
+            if let Some(plain_response) = json_response["candidates"][0]["content"]["parts"][0]["text"].as_str() {
+                let message = format_message(from, msg);
+                let plain_message = format!("{}  {}", message, plain_response);
+                let send_to = determine_send_to(msg, from);
+                tx.send(PostType::Post(plain_message, send_to)).unwrap();
+            } else {
+                eprintln!("Response JSON does not have the expected structure");
+            }
+        },
+        Err(e) => eprintln!("Failed to parse response JSON: {:?}", e),
+    }
+}
+
+fn format_message(from: &str, msg: &str) -> String {
+    if msg.contains("/pm") {
+        format!("Dantca => Hello, @{}! Here's my answer:", from)
+    } else if msg.contains("public") {
+        format!("Dantca => Hello everyone! @{} asked a question, and here's my answer:", from)
+    } else if msg.contains("members") {
+        format!("Dantca => Hello members! @{} asked a question, and here's my answer:", from)
+    } else {
+        format!("Dantca => Hello all, @{}! Here's my answer:", from)
+    }
+}
+
+fn determine_send_to(msg: &str, from: &str) -> Option<String> {
+    if msg.contains("/pm") {
+        Some(from.to_owned())
+    } else if msg.contains("public") {
+        Some(SEND_TO_ALL.to_owned())
+    } else if msg.contains("members") {
+        Some(SEND_TO_MEMBERS.to_owned())
+    } else {
+        Some(SEND_TO_ALL.to_owned())
+    }}
 // Fungsi untuk menghitung jumlah kicked users dan mendapatkan username baru
 
 // Fungsi untuk menyapa pengguna baru yang memasuki chat
