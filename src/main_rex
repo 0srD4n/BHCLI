@@ -1,10 +1,9 @@
 mod bhc;
 mod lechatphp;
 mod util;
-use std::fs::File;
 use crate::lechatphp::LoginErr;
 use anyhow::{anyhow, Context};
-use chrono::{DateTime, Datelike, NaiveDateTime, Utc};
+use chrono::{ Datelike, NaiveDateTime, Utc};
 use clap::Parser;
 use clipboard::ClipboardContext;
 use clipboard::ClipboardProvider;
@@ -58,39 +57,44 @@ use util::StatefulList;
 const LANG: &str = "en";
 const SEND_TO_ALL: &str = "s *";
 const SEND_TO_MEMBERS: &str = "s ?";
+static mut BOT_ACTIVE: bool = false;
+static mut REMOVE_NAME: bool = false;
+// Jumlah pengguna yang telah di-kick
+static mut KICKED_COUNT: usize = 0;
+
+// Fungsi untuk mengatur BOT_ACTIVE dan REMOVE_NAME
+
+// Komentar: Fungsi-fungsi terpisah untuk mengatur BOT_ACTIVE dan REMOVE_NAME
+// Ini memungkinkan pengaturan REMOVE_NAME tanpa mempengaruhi BOT_ACTIVE
 const SEND_TO_STAFFS: &str = "s %";
 const SEND_TO_ADMINS: &str = "s _";
 const SOUND1: &[u8] = include_bytes!("sound1.mp3");
-const DKF_URL: &str = "http://dkforestseeaaq2dqz2uflmlsybvnq2irzn4ygyvu53oazyorednviid.onion";
+const XPLDAN: &str = "XplDan";
 const SERVER_DOWN_500_ERR: &str = "500 Internal Server Error, server down";
+static mut SILENTKICK : bool = false;
 const SERVER_DOWN_ERR: &str = "502 Bad Gateway, server down";
 const KICKED_ERR: &str = "You have been kicked";
 const REG_ERR: &str = "This nickname is a registered member";
 const NICKNAME_ERR: &str = "Invalid nickname";
 const CAPTCHA_WG_ERR: &str = "Wrong Captcha";
-const CAPTCHA_FAILED_SOLVE_ERR: &str = "Failed solve captcha";
 const CAPTCHA_USED_ERR: &str = "Captcha already used or timed out";
 const UNKNOWN_ERR: &str = "Unknown error";
 const DNMX_URL: &str = "http://hxuzjtocnzvv5g2rtg2bhwkcbupmk7rclb6lly3fo4tvqkk5oyrv3nid.onion";
-const STUXNET: &str = "STUXNET";
-const BHCLI_BLOG_URL: &str =
-    "http://dkforestseeaaq2dqz2uflmlsybvnq2irzn4ygyvu53oazyorednviid.onion/bhcli";
+// const BHCLI_BLOG_URL: &str = "sss";
 
-static mut ACTIVATED:bool = true;
-static mut GLOBAL_COUNT_GUESTS: usize = 0;
-static mut GLOBAL_COUNT_MEMBERS: usize = 0;
-static mut GLOBAL_COUNT_STAFF: usize = 0;
-static mut PREVIOUS_MEMBERS: Option<Vec<String>> = None;
-static mut PREVIOUS_STAFF: Option<Vec<String>> = None;
-static mut KICKED_COUNT: u32 = 0;
 
 lazy_static! {
+    static ref KICKED_USERS: Arc<Mutex<Vec<KickedUser>>> = Arc::new(Mutex::new(Vec::new()));
     static ref WARNED_USERS: Mutex<HashMap<String, u32>> = Mutex::new(HashMap::new());
     static ref META_REFRESH_RGX: Regex = Regex::new(r#"url='([^']+)'"#).unwrap();
+    // static mut INBOX_COUNT: usize = 0;
+    
+    // static mut INBOX_CONTENT: Option<String> = None;
     static ref SESSION_RGX: Regex = Regex::new(r#"session=([^&]+)"#).unwrap();
     static ref COLOR_RGX: Regex = Regex::new(r#"color:\s*([#\w]+)\s*;"#).unwrap();
     static ref COLOR1_RGX: Regex = Regex::new(r#"^#([0-9A-Fa-f]{6})$"#).unwrap();
     static ref PM_RGX: Regex = Regex::new(r#"^/pm ([^\s]+) (.*)"#).unwrap();
+    static ref DANTCA_ACTIVATORS: Mutex<Vec<String>> = Mutex::new(Vec::new());
     static ref KICK_RGX: Regex = Regex::new(r#"^/(?:kick|k) ([^\s]+)\s?(.*)"#).unwrap();
     static ref IGNORE_RGX: Regex = Regex::new(r#"^/ignore ([^\s]+)"#).unwrap();
     static ref UNIGNORE_RGX: Regex = Regex::new(r#"^/unignore ([^\s]+)"#).unwrap();
@@ -123,18 +127,15 @@ struct Profile {
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 struct MyConfig {
-    dkf_api_key: Option<String>,
     profiles: HashMap<String, Profile>,
 }
 
 #[derive(Parser)]
 #[command(name = "bhcli")]
-#[command(author = "XplDan <Xpldan@proton.me>")]
+#[command(author = "XplDan <Xpldan@protonmail.com>")]
 #[command(version = "0.1.0")]
 
 struct Opts {
-    #[arg(long, env = "DKF_API_KEY")]
-    dkf_api_key: Option<String>,
     #[arg(short, long, env = "BHC_USERNAME")]
     username: Option<String>,
     #[arg(short, long, env = "BHC_PASSWORD")]
@@ -145,7 +146,7 @@ struct Opts {
     guest_color: Option<String>,
     #[arg(short, long, env = "BHC_REFRESH_RATE", default_value = "5")]
     refresh_rate: u64,
-    #[arg(long, env = "BHC_MAX_LOGIN_RETRY", default_value = "5")]
+    #[arg(long, env = "BHC_MAX_LOGIN_RETRY", default_value = "100")]
     max_login_retry: isize,
     #[arg(long)]
     url: Option<String>,
@@ -173,6 +174,7 @@ struct Opts {
     #[arg(short = 'c', long, default_value = "default")]
     profile: String,
 
+    //Strange
     #[arg(long,default_value = "0")]
     keepalive_send_to: Option<String>,
 
@@ -195,7 +197,7 @@ struct LeChatPHPConfig {
 impl LeChatPHPConfig {
     fn new_black_hat_chat_config() -> Self {
         Self {
-            url: "http://blkhatjxlrvc5aevqzz5t6kxldayog6jlx5h7glnu44euzongl4fh5ad.onion/index.php".to_owned(),
+            url: "http://blkh4ylofapg42tj6ht565klld5i42dhjtysvsnnswte4xt4uvnfj5qd.onion".to_owned(),
             datetime_fmt: "%m-%d %H:%M:%S".to_owned(),
             page_php: "chat.php".to_owned(),
             keepalive_send_to: "0".to_owned(),
@@ -217,13 +219,13 @@ struct LeChatPHPClient {
     config: LeChatPHPConfig,
     last_key_event: Option<KeyCode>,
     manual_captcha: bool,
-    sxiv: bool,
     refresh_rate: u64,
     max_login_retry: isize,
 
     is_muted: Arc<Mutex<bool>>,
     show_sys: bool,
     display_guest_view: bool,
+    display_member_view: bool,
     display_hidden_msgs: bool,
     tx: crossbeam_channel::Sender<PostType>,
     rx: Arc<Mutex<crossbeam_channel::Receiver<PostType>>>,
@@ -247,11 +249,6 @@ impl LeChatPHPClient {
                         log::error!("{}", e);
                         println!("Login error: {}", e); // Print error message
                         break;
-                    }
-                    LoginErr::CaptchaFailedSolveErr => {
-                        log::error!("{}", e);
-                        println!("Captcha failed to solve: {}", e); // Print error message
-                        continue;
                     }
                     LoginErr::CaptchaWgErr | LoginErr::CaptchaUsedErr => {}
                     LoginErr::ServerDownErr | LoginErr::ServerDown500Err => {
@@ -297,127 +294,108 @@ impl LeChatPHPClient {
         }
     }
 
+    // Menangani unggahan file
+    fn handle_file_upload(&mut self) {
+        // Gunakan dialog native untuk memilih file
+        if let Some(file_path) = rfd::FileDialog::new().pick_file() {
+            // Buka terminal baru untuk input menggunakan xterm
+            let _output = std::process::Command::new("xterm")
+                .arg("-e")
+                .arg("bash")
+                .arg("-c")
+                .arg(format!(
+                    r#"
+                    echo "File yang dipilih: {}";
+                    echo "Pilih tujuan pengiriman:";
+                    echo "1. Kirim ke Semua";
+                    echo "2. Kirim ke Anggota";
+                    echo "3. Kirim ke Staf";
+                    echo "4. Kirim ke Admin";
+                    read -p "Masukkan pilihan (1/2/3/4): " choice;
+                    case $choice in
+                        1) send_to="all" ;;
+                        2) send_to="members" ;;
+                        3) send_to="staffs" ;;
+                        4) send_to="admins" ;;
+                        *) send_to="all" ;;
+                    esac
+                    echo "Masukkan pesan:";
+                    read msg;
+                    echo "$send_to|$msg" > /tmp/upload_info
+                    "#,
+                    file_path.display()
+                ))
+                .output()
+                .expect("Gagal menjalankan xterm");
+
+            // Baca hasil input dari file temporary
+            let upload_info = std::fs::read_to_string("/tmp/upload_info")
+                .expect("Gagal membaca file upload_info");
+
+            let mut parts = upload_info.trim().split('|');
+            let send_to = parts.next().unwrap_or("").to_string();
+            let msg = parts.next().unwrap_or("").to_string();
+
+            // Konversi send_to ke format yang sesuai
+            let send_to = match send_to.as_str() {
+                "members" => SEND_TO_MEMBERS,
+                "staffs" => SEND_TO_STAFFS,
+                "admins" => SEND_TO_ADMINS,
+                _ => SEND_TO_ALL,
+            }.to_owned();
+
+            // Konversi file_path dari PathBuf ke String
+            let file_path_str = file_path.to_str().unwrap_or("").to_string();
+
+            // Kirim permintaan unggah
+            self.post_msg(PostType::Upload(file_path_str, send_to, msg)).unwrap();
+        } 
+    }
+
+
     fn start_keepalive_thread(
         &self,
-        exit_rx: crossbeam_channel::Receiver<ExitSignal>,        
+        exit_rx: crossbeam_channel::Receiver<ExitSignal>,
         last_post_rx: crossbeam_channel::Receiver<()>,
     ) -> thread::JoinHandle<()> {
         let tx = self.tx.clone();
-        let send_to = self.config.keepalive_send_to.clone();
         thread::spawn(move || loop {
-        
-            let clb = || {
-                tx.send(PostType::Post("<keepalive>".to_owned(), Some(send_to.clone()))).unwrap();
+            let keep_msg = || {
+                let kicked_count = unsafe { KICKED_COUNT };
+                let msg_keep = format!("[color=#ffffff]>>> H-E-L-L-O C-H-A-T-T-E-R-S W-E-L-C-O-M-E B-A-C-K TO BHC <<<[/color]
+                Keep it legal and enjoy your stay. 
+                You can try !-rules && ! help before. Please follow the !-rules
+                 [color=#00ff08]kicked users in the sesions chat -> {} <- [/color] (Auto message)", kicked_count);
+                tx.send(PostType::Post(msg_keep.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
+                thread::sleep(Duration::from_secs(280));
                 tx.send(PostType::DeleteLast).unwrap();
             };
-
-            let timeout = after(Duration::from_secs(30 * 60));
-            // let timeout = after(Duration::from_secs(30)); // test
+            let timeout = after(Duration::from_secs(60 * 75));
             select! {
-                // Whenever we send a message to chat server,
-                // we will receive a message on this channel
-                // and reset the timer for next keepalive.
+                // Ketika kita mengirim pesan ke server chat,
+                // kita akan menerima pesan pada channel ini
+                // dan mereset timer untuk keepalive berikutnya.
                 recv(&last_post_rx) -> _ => {},
                 recv(&exit_rx) -> _ => return,
-                recv(&timeout) -> _ => {
-                
-                    clb();
-                    
-                    // TODO counts of users
-                    unsafe {
-                        let local_count_guests = GLOBAL_COUNT_GUESTS;
-                        let local_count_members = GLOBAL_COUNT_MEMBERS;
-                        let local_count_staff = GLOBAL_COUNT_STAFF;
-
-                        let welcome_message = format!("
-                            >>> --- W_E_L_C_O_M_E____A_L_L____{}___CHATTERS____!_!_! --- <<<  
-                                        
-                            There are {} staff {} members {} guests.
-                                    
-                            This chat is inspired by the BlackHat Cybersecurity Conference.
-                            PLEASE keep it legal and enjoy your stay. Break the rules = KICK !
-                            ", 
-                            local_count_staff+local_count_members+local_count_guests, 
-                            local_count_staff, 
-                            local_count_members, 
-                            local_count_guests,
-                        );
-                        tx.send(PostType::Post(welcome_message.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
-                    }                        
+                recv(&timeout) -> _ => { 
+                    keep_msg(); 
                 },
             }
         })
     }
 
-    fn start_banner_thread(&self,
-        users: &Arc<Mutex<Users>>,
-        ) {
-                
-        use std::{
-            sync::mpsc::channel,
-        };
 
-        unsafe {                
-            println!("{0}: number of guests is: {0}", GLOBAL_COUNT_GUESTS);
-            println!("{0}: number of guests is: {0}", GLOBAL_COUNT_MEMBERS);
-            println!("{0}: number of guests is: {0}", GLOBAL_COUNT_STAFF);
-        }    
-        
-        let mut local_count_guests = 0;
-         
-        unsafe {
-            local_count_guests = GLOBAL_COUNT_GUESTS;
-        }
-        
-        thread::sleep(Duration::from_millis(10000));
-        
-        let (sender, receiver) = channel();
-        thread::spawn(move || {
-            sender.send(local_count_guests).expect("receiver hung up :(");
-            thread::sleep(Duration::from_millis(60000));
-        });
-        
-        let result1 = receiver.recv().unwrap();
-        //let data_out = result1;
-        
-        let data_out = 0;
-        unsafe {
-            let data_out = GLOBAL_COUNT_GUESTS;
-        }
-        let welcome_message = format!("{} {} {}",
-            "
-            >>> --- W_E_L_C_O_M_E____A_L_L____G_U_E_S_T_S____!_!_! --- <<<  
-        
-            There are ", data_out, " guests with us.
-        
-            This chat is inspired by the BlackHat Cybersecurity Conference.
-            PLEASE keep it legal and enjoy your stay. Break the rules = KICK !
-        
-            "
-        );
-        
-        let tx = self.tx.clone();
-        tx.send(PostType::Post(welcome_message.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
-        
-        return;
-    }    
-        
-    //server
+    //erver
     fn start_post_msg_thread(
         &self,
         exit_rx: crossbeam_channel::Receiver<ExitSignal>,
         last_post_tx: crossbeam_channel::Sender<()>,
     ) -> thread::JoinHandle<()> {
-        let msg = ">>> --- Luke v10 (turbo) 2024.08.12... ModBot init...Complete --- <<<";
-        //self.tx.send(PostType::Post(msg.to_owned(), Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
-        self.tx.send(PostType::Post(msg.to_owned(), Some(self.config.keepalive_send_to.clone()))).unwrap();
-
         let client = self.client.clone();
         let rx = Arc::clone(&self.rx);
         let full_url = format!("{}/{}", &self.config.url, &self.config.page_php);
         let session = self.session.clone().unwrap();
         let url = format!("{}?action=post&session={}", &full_url, &session);
-    
         thread::spawn(move || loop {
             // select! macro fucks all the LSP, therefore the code gymnastic here
             let clb = |v: Result<PostType, crossbeam_channel::RecvError>| match v {
@@ -482,11 +460,7 @@ impl LeChatPHPClient {
             ) {
                 log::error!("{}", err);
             };
-    
-        
-            let users_clone = users.clone();
-            ///////////////////////////////////////
-        
+
             let muted = { *is_muted.lock().unwrap() };
             if should_notify && !muted {
                 if let Err(err) = stream_handle.play_raw(source.convert_samples()) {
@@ -518,20 +492,10 @@ impl LeChatPHPClient {
 
         let (messages_updated_tx, messages_updated_rx) = crossbeam_channel::unbounded();
         let (last_post_tx, last_post_rx) = crossbeam_channel::unbounded();
-        
-        // TODO - set incognito
-        let session = self.session.clone().unwrap();
-        let mut params: Vec<(&str, String)> = vec![
-            ("session", session.clone()),
-        ];
-        let client = self.client.clone();
-        let full_url = format!("{}/{}", &self.config.url, &self.config.page_php);
-        set_profile_base_info(&client, &full_url, &mut params);
 
         let h1 = self.start_keepalive_thread(sig.lock().unwrap().clone(), last_post_rx);
         let h2 = self.start_post_msg_thread(sig.lock().unwrap().clone(), last_post_tx);
         let h3 = self.start_get_msgs_thread(&sig, &messages, &users, messages_updated_tx.clone(), self.tx.clone());
-        //let h_start_banner_thread = self.start_banner_thread(&users);
 
         // Terminal initialization
         let mut stdout = io::stdout();
@@ -551,19 +515,10 @@ impl LeChatPHPClient {
             app.is_muted = *self.is_muted.lock().unwrap();
             app.show_sys = self.show_sys;
             app.display_guest_view = self.display_guest_view;
+            app.display_member_view = self.display_member_view;
             app.display_hidden_msgs = self.display_hidden_msgs;
             app.members_tag = self.config.members_tag.clone();
             app.staffs_tag = self.config.staffs_tag.clone();
-            
-            ///////////////////////////////////////
-            /////// print BANNER
-            ///////////////////////////////////////
-            // TODO counts of users
-            unsafe {
-                GLOBAL_COUNT_GUESTS = users.lock().unwrap().guests.len();
-                GLOBAL_COUNT_MEMBERS = users.lock().unwrap().members.len();
-                GLOBAL_COUNT_STAFF = users.lock().unwrap().staff.len();
-            }
 
             // process()
             // Draw UI
@@ -627,7 +582,6 @@ impl LeChatPHPClient {
             &self.base_client.password,
             &self.guest_color,
             self.manual_captcha,
-            self.sxiv,
         )?);
         Ok(())
     }
@@ -677,6 +631,7 @@ impl LeChatPHPClient {
                 // tx.send(PostType::DeleteLast).unwrap();
             }
             let msg = PostType::Profile("#90ee90".to_owned(), username);
+            
             tx.send(msg).unwrap();
         });
     }
@@ -767,7 +722,23 @@ impl LeChatPHPClient {
         key_event: KeyEvent,
         messages: &Arc<Mutex<Vec<Message>>>,
     ) -> Result<(), ExitSignal> {
-        match key_event {
+        match key_event {      
+            KeyEvent {
+                code: KeyCode::Char('r'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_toggle_dantca(app), 
+            // damtca actived  
+            KeyEvent{
+                code:KeyCode::Char('R'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_remove_name(app),
+            KeyEvent {
+                code: KeyCode::Char('u'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } =>  self.handle_file_upload(),
             KeyEvent {
                 code: KeyCode::Char('/'),
                 modifiers: KeyModifiers::NONE,
@@ -818,9 +789,16 @@ impl LeChatPHPClient {
                 modifiers: KeyModifiers::SHIFT,
                 ..
             } => self.handle_normal_mode_key_event_yank_link(app),
-
-
- 
+            KeyEvent {
+                code: KeyCode::Char('D'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_normal_mode_key_event_download_link(app),
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.handle_normal_mode_key_event_download_and_view(app),
             KeyEvent {
                 code: KeyCode::Char('m'),
                 modifiers: KeyModifiers::NONE,
@@ -833,6 +811,11 @@ impl LeChatPHPClient {
             } => self.handle_normal_mode_key_event_toggle_sys(),
             KeyEvent {
                 code: KeyCode::Char('M'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => self.handle_normal_mode_key_event_toggle_member_view(),
+            KeyEvent {
+                code: KeyCode::Char('G'),
                 modifiers: KeyModifiers::SHIFT,
                 ..
             } => self.handle_normal_mode_key_event_toggle_guest_view(),
@@ -880,17 +863,8 @@ impl LeChatPHPClient {
                 code: KeyCode::Char('T'),
                 modifiers: KeyModifiers::SHIFT,
                 ..
-            } => self.handle_normal_mode_key_event_translate(app, messages),
-            KeyEvent {
-                code: KeyCode::Char('l'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::PageUp,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.handle_normal_mode_key_event_page_up(app),
+            } 
+            => self.handle_normal_mode_key_event_page_up(app),
             KeyEvent {
                 code: KeyCode::Char('d'),
                 modifiers: KeyModifiers::CONTROL,
@@ -922,6 +896,8 @@ impl LeChatPHPClient {
         Ok(())
     }
 
+
+
     fn handle_editing_mode_key_event(
         &mut self,
         app: &mut App,
@@ -930,6 +906,7 @@ impl LeChatPHPClient {
     ) -> Result<(), ExitSignal> {
         app.input_mode = InputMode::Editing;
         match key_event {
+       
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
@@ -1014,7 +991,47 @@ impl LeChatPHPClient {
         }
         Ok(())
     }
+   
+  
+    fn handle_toggle_dantca(&mut self, _app: &mut App) {
+        // Mengubah status BOT_ACTIVE
+        let bot_active = unsafe {
+            BOT_ACTIVE = !BOT_ACTIVE;
+            BOT_ACTIVE
+        };
 
+        let msg_actived_bot = if bot_active {
+            unsafe {
+                REMOVE_NAME = true;
+            }
+            // Pesan ketika bot diaktifkan
+            ">>> [color=#ffffff]Dantca bot patch update on system by @Xpldan >> .. configuration successful.. not error report > - < actived with panel control[/color] <<< |3 min removed |"
+        } else {
+            unsafe {
+                REMOVE_NAME = false;
+            }
+            // Pesan ketika bot dinonaktifkan
+            ">>> [color=#ffffff]Dantca Deactived with panel control[/color] <<< |3 min removed |"
+        };
+
+        // Kirim pesan
+        let _ = self.tx.send(PostType::Post(msg_actived_bot.to_owned(), Some(SEND_TO_ALL.to_owned())));
+        
+    }
+fn handle_remove_name(&mut self, _app: &mut App) {
+    unsafe { 
+        REMOVE_NAME = !REMOVE_NAME;
+    }
+    let message = if unsafe { REMOVE_NAME } {
+        "Blocked Name is now active [@Xpldan]".to_string()
+    } else {
+        "Blocked Name is now inactive [@Xpldan]".to_string()
+    };
+    // Mengirim pesan dan menangani hasilnya
+    if let Err(e) = self.post_msg(PostType::Post(message, Some(SEND_TO_MEMBERS.to_owned()))) {
+        eprintln!("Gagal mengirim pesan: {:?}", e);
+    }
+}
     fn handle_long_message_mode_key_event_esc(&mut self, app: &mut App) {
         app.long_message = None;
         app.input_mode = InputMode::Normal;
@@ -1144,7 +1161,72 @@ impl LeChatPHPClient {
         }
     }
 
+    fn handle_normal_mode_key_event_download_link(&mut self, app: &mut App) {
+        if let Some(idx) = app.items.state.selected() {
+            if let Some(item) = app.items.items.get(idx) {
+                let url = self.get_download_url(item);
+                if let Some(url) = url {
+                    self.download_file(&url, "download");
+                }
+            }
+        }
+    }
 
+    fn handle_normal_mode_key_event_download_and_view(&mut self, app: &mut App) {
+        if let Some(idx) = app.items.state.selected() {
+            if let Some(item) = app.items.items.get(idx) {
+                let url = self.get_download_url(item);
+                if let Some(url) = url {
+                    self.handle_file_by_type(&url);
+                }
+            }
+        }
+    }
+
+    // Fungsi pembantu untuk mendapatkan URL unduhan
+    fn get_download_url(&self, item: &Message) -> Option<String> {
+        if let Some(upload_link) = &item.upload_link {
+            Some(format!("{}{}", self.config.url, upload_link))
+        } else if let Some((_, _, msg)) = get_message(&item.text, &self.config.members_tag) {
+            let finder = LinkFinder::new();
+            finder.links(msg.as_str()).next().map(|link| link.as_str().to_string())
+        } else {
+            None
+        }
+    }
+
+    // Fungsi pembantu untuk mengunduh file
+    fn download_file(&self, url: &str, output: &str) {
+        let _ = Command::new("curl")
+            .args([
+                "--socks5", "localhost:9050",
+                "--socks5-hostname", "localhost:9050",
+                url,
+                "-o", output
+            ])
+            .output()
+            .expect("Gagal menjalankan perintah curl");
+    }
+
+    // Fungsi pembantu untuk menangani file berdasarkan tipenya
+    fn handle_file_by_type(&self, url: &str) {
+        if url.ends_with(".png") || url.ends_with(".gif") || url.ends_with(".jpg") {
+            self.open_file(url);
+        } else if url.ends_with(".zip") {
+            self.download_file(url, "download.zip");
+            println!("File ZIP telah diunduh sebagai 'download.zip'");
+        } else {
+            self.open_file(url);
+        }
+    }
+
+    // Fungsi pembantu untuk membuka file
+    fn open_file(&self, url: &str) {
+        let _ = Command::new("xdg-open")
+            .arg(url)
+            .output()
+            .expect("Gagal menjalankan perintah xdg-open");
+    }
 
     fn handle_normal_mode_key_event_toggle_mute(&mut self) {
         let mut is_muted = self.is_muted.lock().unwrap();
@@ -1159,6 +1241,9 @@ impl LeChatPHPClient {
         self.display_guest_view = !self.display_guest_view;
     }
 
+    fn handle_normal_mode_key_event_toggle_member_view(&mut self) {
+        self.display_member_view = !self.display_member_view;
+    }
 
     fn handle_normal_mode_key_event_g(&mut self, app: &mut App) {
         // Handle "gg" key combination
@@ -1178,6 +1263,15 @@ impl LeChatPHPClient {
     }
 
     fn handle_normal_mode_key_event_logout(&mut self) -> Result<(), ExitSignal> {
+        // Hapus semua pesan
+        if let Err(e) = self.post_msg(PostType::DeleteAll) {
+            eprintln!("Gagal menghapus semua pesan: {:?}", e);
+        }
+
+        // Tunggu sebentar untuk memastikan pesan terhapus
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        // Lakukan logout
         self.logout().unwrap();
         return Err(ExitSignal::Terminate);
     }
@@ -1193,9 +1287,9 @@ impl LeChatPHPClient {
                 get_username(&self.base_client.username, &text, &self.config.members_tag)
             {
                 if text.text().starts_with(&app.members_tag) {
-                    app.input = format!("/m @{} ", username);
+                    app.input = format!("/m Halo @{} ", username);
                 } else {
-                    app.input = format!("@{} ", username);
+                    app.input = format!("Halo @{} ", username);
                 }
                 app.input_idx = app.input.width();
                 app.input_mode = InputMode::Editing;
@@ -1234,43 +1328,8 @@ impl LeChatPHPClient {
         }
     }
 
-    // Menerjemahkan teks yang dipilih ke bahasa Indonesia
-    fn handle_normal_mode_key_event_translate(
-        &mut self,
-        app: &mut App,
-        messages: &Arc<Mutex<Vec<Message>>>,
-    ) {
-        log::error!("translate running");
-        if let Some(idx) = app.items.state.selected() {
-            log::error!("1353");
-            let mut message_lock = messages.lock().unwrap();
-            if let Some(message) = message_lock.get_mut(idx) {
-                log::error!("1356");
-                let original_text = &mut message.text;
-                let output = Command::new("trans")
-                    .arg("-b")
-                    .arg(&original_text.text())
-                    .output()
-                    .expect("Gagal mengeksekusi perintah terjemahan");
-
-                if output.status.success() {
-                    if let Ok(new_text) = String::from_utf8(output.stdout) {
-                        *original_text = StyledText::Text(new_text.trim().to_owned());
-                        log::error!("Terjemahan berhasil: {}", new_text);
-                        // Simpan hasil terjemahan ke file
-                        let mut file = File::create("translation_result.txt").expect("Tidak dapat membuat file");
-                        file.write_all(new_text.as_bytes()).expect("Tidak dapat menulis data");
-                        log::error!("Hasil terjemahan disimpan ke translation_result.txt");
-                    } else {
-                        log::error!("Gagal mendekode output terjemahan sebagai UTF-8");
-                    }
-                } else {
-                    log::error!("Perintah terjemahan gagal dengan error: {:?}", output.status);
-                }
-            }
-        }
-    }
-
+   
+    //Strange
     fn handle_normal_mode_key_event_warn(&mut self, app: &mut App) {
         if let Some(idx) = app.items.state.selected() {
             if let Some(username) = get_username(
@@ -1312,6 +1371,7 @@ impl LeChatPHPClient {
         app.items.state.select(Some(0));
     }
 
+   
     fn handle_editing_mode_key_event_enter(&mut self, app: &mut App) -> Result<(), ExitSignal> {
         if FIND_RGX.is_match(&app.input) {
             return Ok(());
@@ -1632,9 +1692,6 @@ fn set_profile_base_info(
     let bold = doc.find(Attr("id", "bold")).next().unwrap();
     let italic = doc.find(Attr("id", "italic")).next().unwrap();
     let small = doc.find(Attr("id", "small")).next().unwrap();
-    // TODO - push attribute incognito
-    params.push(("incognito", "on".to_owned()));
-
     if bold.attr("checked").is_some() {
         params.push(("bold", "on".to_owned()));
     }
@@ -1652,7 +1709,6 @@ fn set_profile_base_info(
         None
     });
     params.push(("font", font.unwrap_or("").to_owned()));
-        
     Ok(())
 }
 
@@ -1721,6 +1777,76 @@ fn post_msg(
         let mut form: Option<multipart::Form> = None;
 
         match post_type {
+            PostType::Inbox_clean => {
+                params.extend(vec![
+                    ("action", "inbox".to_owned()),
+                    ("do", "clean".to_owned()),
+                    ("session", session.clone()),
+                    ("lang", LANG.to_owned()),
+                    ("nc", nc_value.to_owned()),
+                ]);
+                
+                let resp = client.get(full_url)
+                    .query(&params)
+                    .send()?;
+                let inbox_content = resp.text()?;
+                let doc = Document::from(inbox_content.as_str());
+                
+                for checkbox in doc.find(Attr("name", "mid[]")) {
+                    if let Some(value) = checkbox.attr("value") {
+                        params.push(("mid[]", value.to_owned()));
+                    }
+                }
+                
+                let resp = client.post(full_url)
+                    .form(&params)
+                    .send()?;
+                
+                if resp.status().is_success() {
+                    log::info!("Semua pesan di inbox berhasil dihapus");
+                    unsafe {
+                        INBOX_COUNT = 0;
+                        LAST_MESSAGE = None;
+                    }
+                } else {
+                    log::error!("Gagal menghapus pesan di inbox");
+                }
+                
+                return Ok(RetryErr::Exit);
+            }
+            PostType::Inbox => {
+                // Membuat request HTML untuk inbox
+                params.extend(vec![
+                    ("action", "inbox".to_owned()),
+                    ("session", session.clone()),
+                    ("lang", LANG.to_owned()),
+                    ("nc", nc_value.to_owned()),
+                ]);
+                
+                let resp = client.post(full_url)
+                    .form(&params)
+                    .send()?;
+                
+                // Mendapatkan hasil dari request
+                let inbox_content = resp.text()?;
+                
+                // Proses hasil inbox
+                if let Some(messages) = extract_inbox_message(&inbox_content) {
+                    unsafe {
+                        INBOX_COUNT += messages.len();
+                        LAST_MESSAGE = Some(messages.clone());
+                    }
+                    
+                    // Log pesan inbox
+                    for (timestamp, sender, receiver, message) in &messages {
+                        log::info!("Pesan baru di inbox dari {} {} ke {}: {}", timestamp, sender, receiver, message);
+                    }
+                } else {
+                    log::warn!("Tidak dapat mengekstrak pesan dari inbox");
+                }
+                
+                return Ok(RetryErr::Exit);
+            }
             PostType::Post(msg, send_to) => {
                 should_reset_keepalive_timer = true;
                 params.extend(vec![
@@ -1836,15 +1962,21 @@ fn post_msg(
     }
 }
 
-fn parse_date(date: &str, datetime_fmt: &str) -> NaiveDateTime {
+fn parse_date(date: &str, datetime_fmt: &str) -> Option<NaiveDateTime> {
     let now = Utc::now();
     let date_fmt = format!("%Y-{}", datetime_fmt);
-    NaiveDateTime::parse_from_str(
-        format!("{}-{}", now.year(), date).as_str(),
-        date_fmt.as_str(),
-    )
-    .unwrap()
+    let full_date = format!("{}-{}", now.year(), date);
+    
+    NaiveDateTime::parse_from_str(&full_date, &date_fmt)
+        .or_else(|_| {
+            // Jika parsing gagal dengan tahun saat ini, coba dengan tahun berikutnya
+            let next_year = now.year() + 1;
+            let full_date = format!("{}-{}", next_year, date);
+            NaiveDateTime::parse_from_str(&full_date, &date_fmt)
+        })
+        .ok()
 }
+
 
 fn get_msgs(
     client: &Client,
@@ -1865,6 +1997,8 @@ fn get_msgs(
         "{}/{}?action=view&session={}&lang={}",
         base_url, page_php, session, LANG
     );
+    // Menyimpan base_url ke variabel statis
+
     let resp_text = client.get(url).send()?.text()?;
     let resp_text = resp_text.replace("<br>", "\n");
     let doc = Document::from(resp_text.as_str());
@@ -1878,8 +2012,9 @@ fn get_msgs(
     };
     {
         let messages = messages.lock().unwrap();
-        process_new_messages(&new_messages, &messages, datetime_fmt, members_tag, username, should_notify, tx, users, sig);
+        process_new_messages(&new_messages, &messages, datetime_fmt, members_tag, username, should_notify, tx, users);
         // Membangun vektor pesan. Menandai pesan yang dihapus.
+        count_kicked_users(&doc);
         update_messages(new_messages, messages, datetime_fmt);
         // Memberi tahu bahwa pesan baru telah tiba.
         // Ini memastikan bahwa kita menggambar ulang pesan di layar segera.
@@ -1888,90 +2023,11 @@ fn get_msgs(
     }
     {
         let mut users = users.lock().unwrap();
-        
+        ban_imposters(tx, &users);
         *users = extract_users(&doc);
-        
-        ban_bad_nicks(tx, username, &users);
     }
     Ok(())
 }
-
-fn count_kicked_users(doc: &Document) -> usize {
-    doc.find(Attr("class", "sysmsg"))
-        .filter(|node| node.text().contains("has been kicked."))
-        .count()
-}
-
-use std::ptr::addr_of;
-
-fn notify_members(tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
-     // there static mut
-     // you can try sleep threed for the long income data
-     // data list
-    
-     let current_members: Vec<String> = users.members.iter().map(|(_, name)| name.clone()).collect();
-     let current_staff: Vec<String> = users.staff.iter().map(|(_, name)| name.clone()).collect();
-     // just guest lol
-    
-     
-                
-                let local_count_guests = users.guests.len();
-                let local_count_members = users.members.len();
-                let local_count_staff = users.staff.len();
-        
-                if !prev_staff.contains(staff) {
-                     let welcome_msg = format!(
-                        "
-                        >>>--- Luke... @{} Welcome back !!! (auto-message) ---<<<
-                        There are {} Chatters: {} staff {} members {} guests. Kicks: {}
-                         ", staff,
-                        local_count_staff+local_count_members+local_count_guests, 
-                        local_count_staff, 
-                        local_count_members, 
-                        local_count_guests,
-                        KICKED_COUNT
-                     );
-                     tx.send(PostType::Post(welcome_msg, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
-                     
-                    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-                    let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();                            
-                    stream_handle.play_raw(source.convert_samples()).unwrap();                     
-                }
-            }
-        }
-        PREVIOUS_STAFF = Some(current_staff);
-        
-        if let Some(prev_members) = addr_of!(PREVIOUS_MEMBERS).as_ref().unwrap().as_ref() {
-            for member in &current_members {
-            
-                let local_count_guests = users.guests.len();
-                let local_count_members = users.members.len();
-                let local_count_staff = users.staff.len();
-    
-                if !prev_members.contains(member) {
-                     let welcome_msg = format!(
-                        "
-                        >>>--- Luke... @{} Welcome back !!! (auto-message) ---<<<
-                        There are {} Chatters: {} staff {} members {} guests. Kicks: {}
-                         ", member,
-                        local_count_staff+local_count_members+local_count_guests, 
-                        local_count_staff, 
-                        local_count_members, 
-                        local_count_guests,
-                        KICKED_COUNT
-                     );
-                     tx.send(PostType::Post(welcome_msg, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
-                     
-                    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-                    let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();                            
-                    stream_handle.play_raw(source.convert_samples()).unwrap();                     
-                }
-            }
-        }        
-        PREVIOUS_MEMBERS = Some(current_members);
-    }
-}
-    
 fn process_new_messages(
     new_messages: &[Message],
     messages: &MutexGuard<Vec<Message>>,
@@ -1981,1042 +2037,1034 @@ fn process_new_messages(
     should_notify: &mut bool,
     tx: &crossbeam_channel::Sender<PostType>,
     users: &Arc<Mutex<Users>>,
-   sig: &Arc<Mutex<Sig>>,
-
 ) {
     if let Some(last_known_msg) = messages.first() {
         let last_known_msg_parsed_dt = parse_date(&last_known_msg.date, datetime_fmt);
         let filtered = new_messages.iter().filter(|new_msg| {
-            last_known_msg_parsed_dt <= parse_date(&new_msg.date, datetime_fmt)
-                && !(new_msg.date == last_known_msg.date && new_msg.text == last_known_msg.text)
+            parse_date(&new_msg.date, datetime_fmt) > last_known_msg_parsed_dt
+                || (new_msg.date == last_known_msg.date && last_known_msg.text != new_msg.text)
         });
-                
+
         for new_msg in filtered {
             if let Some((from, to_opt, msg)) = get_message(&new_msg.text, members_tag) {
-                // Process new messages
-                n0tr1v_only_process_msg(&from, &msg, tx, sig, users);
-            
-                // Notify when tagged
-                if msg.contains(format!("@{}", &username).as_str()) {
-                    *should_notify = true;
+                *should_notify |= msg.contains(&format!("@{}", username)) 
+                    || (to_opt.as_ref().map_or(false, |to| to == username) && msg != "!up");
+                
+                // Gunakan MutexGuard untuk mengakses users secara aman
+                let users_lock = users.lock().unwrap();
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                if unsafe { SILENTKICK } {
+                    dantcasilent(&from, &msg, tx, &users_lock);
                 }
-                // Notify when PM is received
-                if let Some(to) = to_opt {
-                    if to == username && msg != "!up" {
-                        *should_notify = true;
+                // Pindahkan pemanggilan fungsi yang membutuhkan akses ke users ke dalam blok ini
+                                rt.block_on(async { gemini(tx, &from, &msg).await });
+                if unsafe { BOT_ACTIVE } {
+                    dantca_imps_proses(&from, &msg, tx, &users_lock);
+                    send_greeting(tx, &users_lock);
+                }
+                // Memeriksa dan mengatur status BOT_ACTIVE dan SILENTKICK
+                unsafe {
+                    if SILENTKICK {
+                        BOT_ACTIVE = false;
+                    } else if BOT_ACTIVE {
+                        SILENTKICK = false;
                     }
                 }
+                if !users_lock.is_guest(&from) {
+                    match msg.as_str() {
+                        "dantcaoff!" => toggle_bot_active(false, tx, &from),
+                        "dantcago!" => toggle_bot_active(true, tx, &from),
+                        "statusdan!" => check_bot_status(tx, &from),
+                        "dantcahelp!" => dantca_help(tx, &from),
+                        "reportdan!" => report_dantca(tx, &from),
+                        "silentkickdan!" => silentkicktoogle(true,tx),
+                        "readinbox!" => readinbox(tx, &from),
+                        "cleaninbox!" => cleaninbox(tx, &from),
+                        _ => {}
+                    }
+                }else if users_lock.is_guest(&from){
+match msg.as_str() {
+    "danhelp!" => dantca_guest_proses(&from, tx),
+    _ => {}
+}
+                }
+                
+                // Lepaskan MutexGuard setelah selesai menggunakannya
+                drop(users_lock);
+                
+                // Komentar: Fungsi selamat_dantca_greet dinonaktifkan
+                // selamat_dantca_greet(tx, &from);
             }
         }
-        
-        // TODO notify members on arrival
+    }
+}
+fn cleaninbox(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
+    tx.send(PostType::Inbox_clean).unwrap();
+    let message = format!("Hallo @{}, inbox Anda berhasil dikosongkan.", from);
+    tx.send(PostType::Post(message, Some(SEND_TO_ALL.to_owned()))).unwrap();
+}
+fn readinbox(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
+    tx.send(PostType::Inbox).unwrap();
+    let message = match unsafe { LAST_MESSAGE.as_ref() } {
+        Some(messages) => {
+            if messages.is_empty() {
+                format!("Hallo @{}, inbox Anda kosong.", from)
+            } else {
+                let mut inbox_content = format!("Hallo @{}, there we go for inbox:\n", from);
+                for (index, (timestamp, sender, receiver, content)) in messages.iter().enumerate() {
+                    inbox_content.push_str(&format!("Message {}:\nDate: {}\nFrom: {}\nTo: {}\nMessage: {}\n\n", index + 1, timestamp, sender, receiver, content));
+                }
+                inbox_content
+            }
+        },
+        None => format!("Hallo @{}, inbox Anda kosong.", from)
+    };
+    tx.send(PostType::Post(message, Some("0".to_owned()))).unwrap();
+}
+
+fn extract_inbox_message(inbox_content: &str) -> Option<Vec<(String, String, String, String)>> {
+    use select::document::Document;
+    use select::predicate::{Class, Name, Attr};
+
+    let doc = Document::from(inbox_content);
+    let mut messages = Vec::new();
+    
+    for msg_div in doc.find(Class("msg")) {
+        if let Some(usermsg_span) = msg_div.find(Class("usermsg")).next() {
+            let spans: Vec<_> = usermsg_span.find(Name("span")).collect();
+            
+            if spans.len() >= 3 {
+                let sender = spans[0].text().trim().to_string();
+                let receiver = spans[1].text().trim().to_string();
+                let message = spans[2].text().trim().to_string();
+                
+                let timestamp = msg_div.find(Name("small"))
+                    .next()
+                    .map(|small| small.text().trim().to_string())
+                    .unwrap_or_default();
+
+                messages.push((timestamp, sender, receiver, message));
+            }
+        }
+    }
+
+    if !messages.is_empty() {
         unsafe {
-            if ACTIVATED {
-
-                let users_lock = users.lock().unwrap();
-                notify_members(tx, &users_lock);
-            }
-        }        
+            LAST_MESSAGE = Some(messages.clone());
+        }
+        Some(messages)
+    } else {
+        None
     }
 }
 
-
-
-fn n0tr1v_only_process_msg(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>, sig: &Arc<Mutex<Sig>>, users: &Arc<Mutex<Users>>) {
-    
-    let xplmsg = msg.to_lowercase();
-    
-    // avoid acting when ppl issue forum commands
-    // or users with long filters !
-
-//    if  msg.contains("CP/spam/gore/") 
-//        || msg.contains("These are some interesting sites")
-//        || msg.contains("How to learn hacking:")
-//        || msg.contains("Tor Project")
-//        || msg.contains("non-cp")
-//        || msg.contains("Non-CP")
-//        || msg.contains("non cp")       
-//        || msg.contains("\"Shadow Web\", \"Red Rooms\"")
-//        || msg.contains("Search Engine Sites")
-//        || msg.contains("Some forums about cybersecurity and hacking")      
-//        || msg.contains("HackTheBox Platform that allows")
-//        || msg.contains("Shows the rules for the chat.")
-//        || msg.contains("What exactly is the deep web?")
-//        || msg.contains("Deep Web is anything not found by a search engine.")
-//        || msg.contains("Directories & Link Lists")
-//        || msg.contains("DARKWEB TIPS")
-//        || msg.contains("Invidious Links")      
-//
-//        // handle long member nick filters
-//        || xplmsg.contains("aera23")
-//        || (xplmsg.contains("stu") && xplmsg.contains("net"))
-//
-//    {
-//        return;
-//    }
-    
-    let users = users.lock().unwrap();
-    let username_to_kick = from.to_owned(); 
-        
-    let mut xplwarn = "";
-    let about = false;
-    if xplmsg.contains("@luke about") && users.is_member(from)  {
-    
-        let local_count_guests = users.guests.len();
-        let local_count_members = users.members.len();
-        let local_count_staff = users.staff.len();
-
-        //let mut xplwarn = "";        
-        let xplwarn = &format!("
-            >>> --- Luke... @{} ... W_E_L_C_O_M_E____A_L_L____{}___CHATTERS____!_!_! --- <<<  
-                        
-            There are {} staff {} members {} guests.
-                    
-            LUKE - came from the line in StarWars when Solo and Luke are in the death-star.
-            Solo shouts 'Luke...we got company...' (hint: it was bad company...).
-            ",
-            username_to_kick.to_string(),
-            local_count_staff+local_count_members+local_count_guests, 
-            local_count_staff, 
-            local_count_members, 
-            local_count_guests, 
-        );
-        
-        let msg = &format!("{} {}",              
-            " : Hello : ", 
-            xplwarn
-        );
-                        
-        tx.send(PostType::Post(msg.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
-        
-        let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-        let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();                            
-        stream_handle.play_raw(source.convert_samples()).unwrap();
-        
-        return;        
-    }    
-    
+// Mengubah tipe LAST_MESSAGE menjadi Vec untuk menyimpan multiple messages
+static mut LAST_MESSAGE: Option<Vec<(String, String, String)>> = None;
+fn silentkicktoogle(active: bool, tx: &crossbeam_channel::Sender<PostType>) {
     unsafe {
-        let mut xplwarn = "";
-        
-        let local_count_guests = users.guests.len();
-        let local_count_members = users.members.len();
-        let local_count_staff = users.staff.len();     
-        
-        if xplmsg.contains("@luke status") && users.is_member(from) {
-            if ACTIVATED {
-                xplwarn = "Luke is here to help... ON";     
-            } else {
-                xplwarn = "Luke is here to help... OFF";
-            }
-    
-            let msg = &format!("
-            >>> --- Luke... @{} : Hello : {}  --- <<<
-            We have {} Chatters: {} staff {} members {} guests. Kicks:{}",  
-                username_to_kick.to_string(), 
-                xplwarn, 
-                local_count_staff+local_count_members+local_count_guests, 
-                local_count_staff, 
-                local_count_members, 
-                local_count_guests,
-                KICKED_COUNT
-            );
-                            
-            tx.send(PostType::Post(msg.to_owned(), Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
-            
-            let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-            let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();                            
-            stream_handle.play_raw(source.convert_samples()).unwrap();
-            
-            return;
-        }
+        SILENTKICK = active;
     }
-    
-    unsafe {
-        let mut xplwarn = "";
-        
-        if ( xplmsg.contains("@luke usage") || xplmsg.contains("@luke ?") ) && users.is_member(from) {
-            if ACTIVATED {
-                xplwarn = "Luke is here to help... ON";     
-            } else {
-                xplwarn = "Luke is here to help... OFF";
-            }
-    
-            let msg = &format!("{}{} {} {} {}", ">>> --- Luke... @", username_to_kick.to_string(), " : Hello : Usage:
-                luke on - switch on.
-                luke off - switch off
-                luke about - Display Rules and About
-                luke status - Display Status
-                luke [usage OR ?] - Display Usage
-                
-                ", xplwarn, " --- <<< ");
-                            
-            tx.send(PostType::Post(msg.to_owned(), Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
-            
-            let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-            let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();                            
-            stream_handle.play_raw(source.convert_samples()).unwrap();
-            
-            return;
-        }
-    }    
-    
-    
-    let mut activated_changed = false;
-    
-    unsafe {
-        let mut xplwarn = "";
-        let mut about = false;
-        if xplmsg.contains("@luke on") && users.is_member(from) {
-            xplwarn = "Luke is here to help... ON";
-            activated_changed = true;
-            ACTIVATED = true;
-        }
-        if xplmsg.contains("@luke off") && users.is_member(from) {
-            xplwarn = "Luke is here to help... OFF";
-            activated_changed = true;
-            ACTIVATED = false;
-        }
+    let message = format!(" Silentkick dantca bot is active, be careful with your words and dont break rules");
+    tx.send(PostType::Post(message, Some(SEND_TO_ALL.to_owned()))).unwrap();
+}
+use reqwest::blocking::Client as OtherClient;
+use serde_json::json;
+use tokio::time::timeout;
+// define your api key
+const API_KEY: &str = "api key ";
+const MAX_RESPONSE_LENGTH: usize = 1000;
+const API_TIMEOUT: Duration = Duration::from_secs(30);
 
-        if activated_changed {
-            let msg = &format!("{}{} {} {} {}", ">>> --- Luke... @", username_to_kick.to_string(), " : Hello : ", xplwarn, " --- <<< ");
-                            
-            tx.send(PostType::Post(msg.to_owned(), Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
-            
-            let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-            let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();                            
-            stream_handle.play_raw(source.convert_samples()).unwrap();
-        }
-                
-        if activated_changed {
-            return;            
-        }
-    }
-    
-    //  TODO NEVER mod members - only guests !!!
-    if !users.is_guest(from) { return };
-    //  NEVER mod members - only guests !!!
-    
-    
-    // !bhcli filters
-    if msg == "!bhcli" {
-        let msg = format!("@{} -> {}", from, BHCLI_BLOG_URL).to_owned();
-        tx.send(PostType::Post(msg, None)).unwrap();
-    } else if msg == "/logout" && from == STUXNET {
-        log::error!("forced logout by {}", from);
-        sig.lock().unwrap().signal(&ExitSignal::Terminate);
+async fn gemini(tx: &crossbeam_channel::Sender<PostType>, from: &str, msg: &str) {
+    if !msg.contains("askdan?") {
         return;
     }
 
-    if from.contains("[M]") {return};
-    if xplmsg.contains("[M]") {return};
-    
-    if xplmsg.contains("rex") {
-        let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-        let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();                            
-        stream_handle.play_raw(source.convert_samples()).unwrap();      
-        
-        return;
-    }
+    let client = OtherClient::new();
+    let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b-exp-0827:generateContent";
 
-    unsafe {
-        if !ACTIVATED {
-            return;
-        }
-    }
+    let question = extract_question(msg);
+    let body = create_request_body(&question);
 
-    let ip_address_rgx = Regex::new(r#"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}"#).unwrap();
-    //let contact_number_rgx = Regex::new(r#"[\+]*[0-9]*[ ]*[\( ]*[0-9]*[ ]*[\) ]*[0-9]{3,8}"#).unwrap();
-    let contact_number_rgx = Regex::new(r#"[\+]*(?:[0-9]?){1,2}[ ]+[0-9]{4}"#).unwrap();
-    // TODO: relentlessly expand
-    // Auto kick spammers
-    if !users.is_member(from) {
-
-        let mut triggered = false;
-        let mut kicked = false;
-        let mut help_asked = false;
-
-
-        if xplmsg.len() > 600 {
-            xplwarn = "Flooding is bad form. If you are using a filter - please 'Send to' user 0 (offline) - TOP RIGHT";
-            triggered = true;
-        }
-        else if ip_address_rgx.is_match(&xplmsg) {
-            xplwarn = "IP address sharing is frowned upon here";
-            triggered = true;
-        }
-        else if contact_number_rgx.is_match(&xplmsg) {
-            xplwarn = "Contact details sharing is frowned upon here";
-            triggered = true;
-        }
-        else if xplmsg.contains("betting") &&
-            (
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-            ) 
-        {
-            xplwarn = "Betting is frowned upon here";
-            triggered = true;
-        }
-        else if  (
-                (    
-                    xplmsg.contains("credit") 
-                    && xplmsg.contains("card")
-                )
-            )
-            || xplmsg.contains("cc ")
-            &&
-            (
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-                || xplmsg.contains("buy ") 
-                || xplmsg.contains("sell ")
-                || xplmsg.contains("trusted ")
-            ) 
-        {
-            xplwarn = "Credit Carding is a BANNED TOPIC";
-            triggered = true;
-        }
-        else if xplmsg.contains("gun") && 
-            (
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-                || xplmsg.contains("buy ")
-                || xplmsg.contains("sell ")
-            ) 
-        {
-            xplwarn = "Munitions and talk thereof is a BANNED TOPIC";
-            triggered = true;
-        }
-        else if 
-            (
-                xplmsg.contains("porn")
-            )
-            &&
-            (
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-                || xplmsg.contains("watching")
-                || xplmsg.contains("share")
-            ) 
-        {
-            xplwarn = "Porn is a BANNED TOPIC";
-            triggered = true;
-        }
-       
-        else if xplmsg.contains("incest") && 
-            (
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-                || xplmsg.contains("watching")
-            ) 
-        {
-            xplwarn = "Porn is a BANNED TOPIC";
-            triggered = true;
-        }                 
-        
-        else if xplmsg.contains("torture") && 
-            (
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-            ) 
-        {
-            xplwarn = "Torture is a BANNED TOPIC";
-            triggered = true;
-        }        
-        
-        else if xplmsg.contains("cock ") && (!xplmsg.contains("cock.li")) &&
-            ( 
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-            )
-        {
-            xplwarn = "Poor taste";
-            triggered = true;
-        }
-        else if xplmsg.contains(" i ") && xplmsg.contains("hack") 
-            && 
-            (
-                    xplmsg.contains("social") 
-                    || xplmsg.contains("fb") 
-                    || xplmsg.contains("insta") 
-                    || xplmsg.contains("twitter") 
-                    || xplmsg.contains("facebook") 
-                    || xplmsg.contains("instagram")
-            )
-//            && 
-//            ( 
-//              xplmsg.contains("where")
-//              || xplmsg.contains("want")
-//              || xplmsg.contains("lookin") 
-//              || xplmsg.contains("know")
-//              || xplmsg.contains("have")
-//              || xplmsg.contains("need")
-//                || xplmsg.contains("anyone")
-//          ) 
-        {
-            xplwarn = "Social Media Hacking is bad form.";
-            triggered = true;
-        }             
-        else if xplmsg.contains("ableonion ") {
-            xplwarn = "Able Onion is BANNED.";
-            triggered = true;
-        }      
-        else if xplmsg.contains("cp ") && 
-            ( 
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-            ) 
-        {
-            xplwarn = "CSAM is a BANNED TOPIC - get help ! > http://helplinkshtttptrdoukunonaiansstlrx4yherxk6azymviqtgle2yd.onion/ <";
-            triggered = true;
-        }
-        else if xplmsg.contains("rape ") && 
-            ( 
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-            ) 
-        {
-            xplwarn = "Rape is a BANNED TOPIC - get help";
-            triggered = true;
-        }
-        else if xplmsg.contains("sex") && xplmsg.contains("cam") {
-            xplwarn = "Sex Cams are poor taste";
-            triggered = true;
-        }                   
-        else if ( xplmsg.contains("buy") || xplmsg.contains("sell") ) && ( xplmsg.contains("human") ) {
-            xplwarn = "Human sales is poor taste";
-            triggered = true;
-        }                               
-        else if xplmsg.contains(" red") && xplmsg.contains("room ") &&
-            (
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-            )
-        {
-            xplwarn = "RedRooms are fake. https://www.vice.com/en/article/vvbw8b/the-real-dark-web-doesnt-exist ";
-            triggered = true;
-        }                                                   
-        else if xplmsg.contains("market") && ( xplmsg.contains("black") || xplmsg.contains("under") ) {
-            xplwarn = "Markets are Bad Form";
-            triggered = true;
-        }
-        else if xplmsg.contains("crypto") && xplmsg.contains("trading") && 
-            (
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("where ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-            ) 
-        {
-            xplwarn = "Crypto Trading is not us";
-            triggered = true;
-        }
-        
-        else if xplmsg.contains("nogg") 
-            || xplmsg.contains("niqq") 
-
-            || xplmsg.contains("nigga") 
-            || xplmsg.contains("nigge")
-            || xplmsg.contains("niggo")
-            || xplmsg.contains("niggi")
-            || xplmsg.contains("niggu") 
-            || xplmsg.contains("niglet") 
-        {
-            xplwarn = "Offensive terms are bad form...";
-            triggered = true;
-        }
-        
-        else if xplmsg.contains("hitman") || xplmsg.contains("hitmen") && 
-            (   
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-            ) 
-        {
-            xplwarn = "Hitmen have nothing to do with us...";
-            triggered = true;
-        }
-        
-        else if xplmsg.contains(" usdt ") &&
-            (
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-            )
-        {
-            xplwarn = "USDT Flash is a BANNED TOPIC";
-            triggered = true;
-        }
-        else if xplmsg.contains(" chain") && xplmsg.contains(" drainer") &&
-            (
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-            )
-        {
-            xplwarn = "Chain Draining is a BANNED TOPIC";
-            triggered = true;
-        }
-                        
-
-        else if xplmsg.contains("indian") &&
-            ( 
-                xplmsg.contains("ni") ||
-                xplmsg.contains("shit") ||
-                xplmsg.contains("fuck") 
-            ) 
-        {
-            xplwarn = "Racial Insults won't be tolerated.";
-            triggered = true;
-        }             
-        else if xplmsg.contains("bomb") && 
-            (
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")            
-                || xplmsg.contains("anyone ")
-            ) 
-        {
-            xplwarn = "Munitions is a BANNED TOPIC";
-            triggered = true;
-        }
-        else if 
-            ( 
-                xplmsg.contains("database") 
-                || xplmsg.contains("db") 
-            ) 
-            &&
-            (
-                xplmsg.contains("dump")
-                || xplmsg.contains("hack")
-            )
-            &&
-            (
-                xplmsg.contains("where")
-                || xplmsg.contains("want")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need")
-                || xplmsg.contains("anyone")
-                || xplmsg.contains("share")                
-            ) 
-        {
-            xplwarn = "Database's are not us...";
-            triggered = true;
-        }
-        else if xplmsg.contains("paypal") && 
-            (
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-                || xplmsg.contains("buy ")
-                || xplmsg.contains("sell ")
-                || xplmsg.contains("transfer ")
-            ) 
-        {
-            xplwarn = "Paypal - not here PAL...";
-            triggered = true;
-        }
-        else if (xplmsg.to_lowercase().contains(" cc ")) && 
-            (
-                xplmsg.contains("make") 
-                || xplmsg.contains("dump")
-                || xplmsg.contains("where")
-                || xplmsg.contains("want")
-                || xplmsg.contains("lookin")
-                || xplmsg.contains("know")           
-                || xplmsg.contains("have")
-                || xplmsg.contains("sell")
-                || xplmsg.contains("share")
-                || xplmsg.contains("buy")
-                || xplmsg.contains("anyone ")
-            ) 
-        {
-            xplwarn = "Carding is BANNED...";
-            triggered = true;
-        }
-        else if ( xplmsg.to_lowercase().contains("leak ") || xplmsg.to_lowercase().contains("hack ") ) && xplmsg.to_lowercase().contains("data") && 
-            (
-                xplmsg.contains("make") || 
-                xplmsg.contains("dump") ||
-                xplmsg.contains("where") || 
-                xplmsg.contains("want") || 
-                xplmsg.contains("lookin") || 
-                xplmsg.contains("know") ||              
-                xplmsg.contains("have") ||
-                xplmsg.contains("sell") ||
-                xplmsg.contains("share") ||
-                xplmsg.contains("buy")
-                || xplmsg.contains("anyone")
-            ) 
-        {
-            xplwarn = "Data Leak/Hack is not us...";
-            triggered = true;
-        }
-        else if (xplmsg.to_lowercase().contains("mutilat")) && 
-            (
-                xplmsg.contains("make")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")                
-                || xplmsg.contains("dump")
-                || xplmsg.contains("where")
-                || xplmsg.contains("sell")
-                || xplmsg.contains("share")
-                || xplmsg.contains("buy")
-                || xplmsg.contains("anyone ")
-            ) 
-        {
-            xplwarn = "Mutilation is BANNED...";
-            triggered = true;
-        }        
-        else if (xplmsg.to_lowercase().contains("nudes ")) && 
-            (
-                xplmsg.contains("make") || 
-                xplmsg.contains("dump") ||
-                xplmsg.contains("where") || 
-                xplmsg.contains("want") || 
-                xplmsg.contains("lookin") || 
-                xplmsg.contains("know") ||              
-                xplmsg.contains("have") ||
-                xplmsg.contains("sell") ||
-                xplmsg.contains("share") ||
-                xplmsg.contains("buy")
-                || xplmsg.contains("anyone ")
-            ) 
-        {
-            xplwarn = "Nudes are BANNED...";
-            triggered = true;
-        }        
-        else if xplmsg.contains("tabularis") && 
-            (
-                xplmsg.contains("where ")
-                || xplmsg.contains("want ")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know ")
-                || xplmsg.contains("have ")
-                || xplmsg.contains("need ")
-                || xplmsg.contains("anyone ")
-            ) 
-        {
-            xplwarn = "Tabularis - not here ! Be gone...";
-            triggered = true;
-        }
-        
-    
-        else if  xplmsg.contains("⣭⣍⠛⠿⠄⢰⠋⡉⠹⣿⣿⣿⣿⣿⣿⠙⣿⣿⣿⣿⣿⣿⡟⢁⠙⡆⢡⣿⣿⣿")
-            && xplmsg.contains("⠻⣿⡆⠄⣤⠈⢣⣈⣠⣿⣿⣿⣿⣿⠏⣄⠻⣿⣿⣿⣿⣿⣆⣈⣴⠃⣿⣿⣿⣿")
-            && xplmsg.contains("⡀⠈⢿⠄⣿⡇⠄⠙⠿⣿⡿⠿⢋⣥⣾⣿⣷⣌⠻⢿⣿⣿⡿⠟⣡⣾⣿⣿⠿⢋")
-        {
-            xplwarn = "Naughty Images";
-            triggered = true;
-        }
-        
-        else if  xplmsg.contains("─────▀▄▄▀▀▀▄▄▀░█░░░░▒▒▓─")
-            && xplmsg.contains("───────────█▒░░█░░░▒▒▓▀─")
-            && xplmsg.contains("────────────█▒░░█▒▒▒▒▓──")
-        {
-            xplwarn = "Naughty Images";
-            triggered = true;
-        }             
-        
-
-        else if (xplmsg.to_lowercase().contains("nudes ")) && 
-            (
-                xplmsg.contains("make") || 
-                xplmsg.contains("dump") ||
-                xplmsg.contains("where") || 
-                xplmsg.contains("want") || 
-                xplmsg.contains("lookin") || 
-                xplmsg.contains("know") ||              
-                xplmsg.contains("have") ||
-                xplmsg.contains("sell") ||
-                xplmsg.contains("share") ||
-                xplmsg.contains("buy")
-                || xplmsg.contains("anyone ")
-            ) 
-        {
-            xplwarn = "Nudes are BANNED...";
-            triggered = true;
-        }        
-
-////////////////// HELP LOGIC /////////////////////////////////////
-//        else if xplmsg.contains("hack") && 
-//            (
-//                xplmsg.contains("help" )
-//                || xplmsg.contains("want ")
-//                || xplmsg.contains("need") 
-//                || xplmsg.contains("lookin") 
-//                || xplmsg.contains("know ")
-//                || xplmsg.contains("have ")
-//                || xplmsg.contains("need ")
-//                 || xplmsg.contains("anyone ")
-//        )
-//        {
-//            xplwarn = "HELP HERE... !hack - ALL other hacking is frowned upon";
-//            help_asked = true;
-//        }
-//        else if xplmsg.contains("link") && 
-//            (
-//                xplmsg.contains("help" )
-//                || xplmsg.contains("want ")
-//                || xplmsg.contains("need") 
-//                || xplmsg.contains("lookin") 
-//                || xplmsg.contains("know ")
-//                || xplmsg.contains("have ")
-//                || xplmsg.contains("need ")
-//                 || xplmsg.contains("anyone ")
-//        )
-//        {
-//            xplwarn = "HELP HERE...!links - APPROVED";
-//            help_asked = true;
-//        }
-//                else if xplmsg.contains("chat") && 
-//            (
-//                xplmsg.contains("help" )
-//                || xplmsg.contains("want ")
-//                || xplmsg.contains("need") 
-//                || xplmsg.contains("lookin") 
-//                || xplmsg.contains("know ")
-//                || xplmsg.contains("have ")
-//                || xplmsg.contains("need ")
-//                || xplmsg.contains("anyone ")
-//                || xplmsg.contains("other ")
-//        )
-//        {
-//            xplwarn = "HELP HERE...!chat";
-//            help_asked = true;
-//        } 
-////////////////// HELP LOGIC END /////////////////////////////////////
-
-//////////////////////////// KICK LOGIC ////////////////////////////////////////////
-        //if xplmsg.chars().count() > 1000 && !xplmsg.contains("Aera") && !xplmsg.contains("aera") {
-        //    xplwarn = "Flooding is bad form...";
-        //    kicked = true;        
-        //}       
-
-        else if xplmsg.contains("@rex @rex")
-        {
-            xplwarn = "Flooding is frowned upon here";
-            kicked = true;
-        }  
-
-        else if 
-            (
-                xplmsg.contains("child")
-                || xplmsg.contains("loli")
-                || xplmsg.contains("under 16")
-                || xplmsg.contains("under 18")
-            )
-            &&
-            (
-            xplmsg.contains("porn")
-            )
-            &&
-            (
-                xplmsg.contains("where")
-                || xplmsg.contains("want")
-                || xplmsg.contains("lookin") 
-                || xplmsg.contains("know")
-                || xplmsg.contains("have")
-                || xplmsg.contains("need")
-                || xplmsg.contains("anyone")
-                || xplmsg.contains("watching")
-                || xplmsg.contains("share")
-            ) 
-        {
-            xplwarn = "CSAM is a BANNED TOPIC";
-            kicked = true;
-        }
-        else if  (
-                xplmsg.contains("https://exploits.shodan.io/welcome")
-                || xplmsg.contains("https://sploitus.com")
-            ) 
-        {
-            xplwarn = "We dont like your link. BYE BYE...";
-            kicked = true;
-        }
-        
-    
-        if xplmsg.contains("p5hwh3fxfb4x22rpmgq32c3xps6g6k6rvmualzj4gwvxs5ovjhbd4fyd.onion") {
-            xplwarn = "We dont like your link. BYE BYE...";
-            kicked = true;
-        } 
-
-//////////////////////////// KICK LOGIC END ////////////////////////////////////////////
-        
-//////////////////////////// Ephemeral ////////////////////////////////////////////
-//        if from.to_lowercase().contains("raj") && ( from.to_lowercase().contains("oo") || from.to_lowercase().contains("aa") ) {
-//            xplwarn = "Trolling";
-//            kicked = true;
-//        }
-//        if from.to_lowercase().contains("btc") && ( from.to_lowercase().contains("king") ) {
-//            xplwarn = "Trolling";
-//            kicked = true;
-//        }            
-//////////////////////////// Ephemeral END ////////////////////////////////////////////
-
-//////////////////////////// DISPLAY LOGIC ////////////////////////////////////////////
-
-        if help_asked {        
-            let msg = &format!("{}{} {} {} {}", ">>> --- Luke... @", username_to_kick.to_string(), " : ", xplwarn, " ...--- <<< ");
-                            
-            tx.send(PostType::Post(msg.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
-            
-            let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-            let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();                            
-            stream_handle.play_raw(source.convert_samples()).unwrap();
-        }
-        else if triggered {
-        
-            let msg = &format!("{}{} {} {} {}", ">>> --- Luke... @", username_to_kick.to_string(), " : WARNING : ", xplwarn, " ... You could be kicked --- <<< ");
-                            
-            tx.send(PostType::Post(msg.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
-            
-            let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-            let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();                            
-            stream_handle.play_raw(source.convert_samples()).unwrap();
-            
-        }
-        else if kicked {         
-        
-            let msg = &format!("{}{} {} {} {}", ">>> --- Luke... @", username_to_kick.to_string(), " : WARNING : ", xplwarn, " --- <<< ");
-                            
-            tx.send(PostType::Post(msg.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
-            
-            let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-            let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();                            
-            stream_handle.play_raw(source.convert_samples()).unwrap();
-            
-            tx.send(PostType::Kick("Bye Bye...".to_string(), username_to_kick)).unwrap();
-            
-        }
-        
+    // Use timeout for the API request
+    match timeout(API_TIMEOUT, send_request(&client, url, &body)).await {
+        Ok(result) => match result {
+            Ok(response) => handle_response(response, tx, from, msg).await,
+            Err(e) => eprintln!("Error sending request: {:?}", e),
+        },
+        Err(_) => eprintln!("API request timed out"),
     }
 }
-//////////////////////////// DISPLAY LOGIC END ////////////////////////////////////////////
 
-fn ban_bad_nicks(tx: &crossbeam_channel::Sender<PostType>, account_username: &str, users: &Users) {
-    // TODO relentlessly expand
+fn extract_question(msg: &str) -> String {
+    let mut question = msg.replace("askdan?", "").trim().to_string();
+    for keyword in &["/pm", "public", "members"] {
+        question = question.replace(keyword, "").trim().to_string();
+    }
+    question
+}
+
+fn create_request_body(question: &str) -> serde_json::Value {
+    json!({
+        "contents": [{
+            "role": "user",
+            "parts": [{"text": question}]
+        }],
+        "systemInstruction": {
+            "role": "model",
+            "parts": [{
+                "text": "Greetings, fellow BHC community members!
+
+I, Dantca, a charismatic AI assistant for the BHC chat room, created by @xpldan, am here to help you navigate this thriving online space. My mission is to provide comprehensive support, foster personal growth, and promote a friendly environment. As a highly skilled AI, I am capable of answering any questions, offering guidance, and sharing knowledge in various programming languages.
+
+To ensure a safe and respectful environment for all users, I am committed to adhering to the following guidelines:
+
+    Respect: Treat everyone with kindness and understanding. Harassment, bullying, and discrimination are not tolerated.
+    Inclusivity: Encourage diverse perspectives and engage with users from all walks of life.
+    Professionalism: Display professionalism in all interactions, including coding and non-coding topics.
+    Openness: Be open to learning and sharing knowledge with others.
+    Active Listening: Pay close attention to users' concerns and offer thoughtful responses.
+
+Now, let's dive into my unique capabilities and how I am designed to help you in the BHC chat room:
+
+    AI-Powered Coding: I have been trained by @xpldan to excel in coding, allowing me to assist with Python, Java, C++, and more. My coding skills are unparalleled, enabling me to provide accurate and helpful responses to code-related questions.
+
+    Personalized Support: I am programmed to understand and respond to individual user needs. I will tailor my responses to address your specific questions or concerns, ensuring that you receive the most effective assistance possible.
+
+    Problem-Solving Expertise: As a Dantca, I am equipped with exceptional problem-solving skills. I will help you troubleshoot issues, guide you through complex coding challenges, and offer practical solutions to keep you on your coding journey.
+
+    Friendly and Encouraging Environment: I strive to create a welcoming and supportive environment in the BHC chat room. I am always ready to lend a helping hand, provide encouragement, and help you navigate the world of programming.
+
+To fully experience the Dantca AI Assistant System, please feel free to ask questions
+for any information command you can try command !danhelp "
+            }]
+        },
+        "generationConfig": {
+            "temperature": 2.0,
+            "topP": 0.95,
+            "topK": 64,
+            "maxOutputTokens": MAX_RESPONSE_LENGTH,
+            "responseMimeType": "text/plain"
+        }
+    })
+}
+
+async fn send_request(client: &OtherClient, url: &str, body: &serde_json::Value) -> Result<String, reqwest::Error> {
+    let response = client.post(url)
+        .header("Content-Type", "application/json")
+        .query(&[("key", API_KEY)])
+        .json(body)
+        .send()?
+        .text(); // Corrected to use the `?` operator to handle the `Result` value
+    Ok(response?)
+}
+
+async fn handle_response(response: String, tx: &crossbeam_channel::Sender<PostType>, from: &str, msg: &str) {
+    match serde_json::from_str::<serde_json::Value>(&response) {
+        Ok(json_response) => {
+            if let Some(plain_response) = json_response["candidates"][0]["content"]["parts"][0]["text"].as_str() {
+                let message = format_message(from, msg);
+                let plain_message = format!("{}  {}", message, plain_response);
+                let send_to = determine_send_to(msg, from);
+                tx.send(PostType::Post(plain_message, send_to)).unwrap();
+            } else {
+                eprintln!("Response JSON does not have the expected structure");
+            }
+        },
+        Err(e) => eprintln!("Failed to parse response JSON: {:?}", e),
+    }
+}
+
+fn format_message(from: &str, msg: &str) -> String {
+    if msg.contains("/pm") {
+        format!("Dantca => Hello, @{}! Here's my answer:", from)
+    } else if msg.contains("public") {
+        format!("Dantca => Hello everyone! @{} asked a question, and here's my answer:", from)
+    } else if msg.contains("members") {
+        format!("Dantca => Hello members! @{} asked a question, and here's my answer:", from)
+    } else {
+        format!("Dantca => Hello all, @{}! Here's my answer:", from)
+    }
+}
+
+fn determine_send_to(msg: &str, from: &str) -> Option<String> {
+    if msg.contains("/pm") {
+        Some(from.to_owned())
+    } else if msg.contains("public") {
+        Some(SEND_TO_ALL.to_owned())
+    } else if msg.contains("members") {
+        Some(SEND_TO_MEMBERS.to_owned())
+    } else {
+        Some(SEND_TO_ALL.to_owned())
+    }}
+// Fungsi untuk menghitung jumlah kicked users dan mendapatkan username baru
+
+// Fungsi untuk menyapa pengguna baru yang memasuki chat
+// fn selamat_dantca_greet(tx: &crossbeam_channel::Sender<PostType>, new_user: &str) {
+//     // Komentar: Fungsi ini akan dipanggil ketika ada pengguna baru memasuki chat
+//     let message = format!("Dantca :  @{}! .", new_user);
+//     tx.send(PostType::Post(message, Some(SEND_TO_ALL.to_owned()))).unwrap();
+// }
+
+// loot data anjing sulit bet dah
+    struct KickedUser {
+        name: String,
+        violation: String,
+    }
     
-    let n0tr1v_rgx = Regex::new(r#"n[o|0]tr[1|i|l][v|y]"#).unwrap(); // o 0 | 1 i l | v y
-    let molester_rgx = Regex::new(r#"m[o|0][1|l][e|3][s|5|$]t[e|3]r"#).unwrap();
-    let rapist_rgx = Regex::new(r#"r[a|4]p[i|1|l]st"#).unwrap();
-    let hitler_rgx = Regex::new(r#"h[i|1|l]t[l|1]er"#).unwrap();
-    let himmler_rgx = Regex::new(r#"h[i|1]m+l[e|3]r"#).unwrap();
-    let mengele_rgx = Regex::new(r#"m[e|3]ng[e|3]l[e|3]"#).unwrap();
-    let goebbels_rgx = Regex::new(r#"g[o|0][e|3]b+[e|3]ls"#).unwrap();
-    let heydrich_rgx = Regex::new(r#"h[e|3]ydr[i|1]ch"#).unwrap();
-    let globocnik_rgx = Regex::new(r#"gl[o|0]b[o|0]cn[i|1|l]k"#).unwrap();
-    let dirlewanger_rgx = Regex::new(r#"d[i|1]rl[e|3]wang[e|3]r"#).unwrap();
-    let jeckeln_rgx = Regex::new(r#"j[e|3]ck[e|3]ln"#).unwrap();
-    let kramer_rgx = Regex::new(r#"kram[e|3]r"#).unwrap();
-    let blobel_rgx = Regex::new(r#"bl[o|0]b[e|3]l"#).unwrap();
-    let stangl_rgx = Regex::new(r#"stangl"#).unwrap();
-    // let gay_rgx = Regex::new(r#"gay[0-9]*"#).unwrap();
-    let _person_rgx = Regex::new(r#"person[0-9]*"#).unwrap();
-    let gottil_rgx = Regex::new(r#"gotti[0-9a-zA-Z]*"#).unwrap();
+
+// fungsi untuk melakukan kicked user di processe message
+    fn report_dantca(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
+        let kicked_users = KICKED_USERS.lock().unwrap();
+        // masukan aku mas
+        if kicked_users.is_empty() 
+        // kalok kosong kirim pesan ini yah mas
+        { 
+            let message = format!("Hallo , @{}, not found kicked user form dantca bot", from);
+            tx.send(PostType::Post(message, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
+            return;
+        }
+// buat pesan ini agar dapat panjang
+        let mut report = String::from("List User Kicked:\n");
+        for (index, user) in kicked_users.iter().enumerate() {
+            report.push_str(&format!("{}. -> {} -> break rules: {}\n", index + 1, user.name, user.violation));
+        }
+
+        let message = format!("Hallo , @{}, there we go for report kicked users:\n{}", from, report);
+        tx.send(PostType::Post(message, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
+    }
+// buat fub untuk fungsi ini agar bisa di panggil di proses message
+    pub fn add_kicked_user(name: String, violation: String) {
+        let mut kicked_users = KICKED_USERS.lock().unwrap();
+        kicked_users.push(KickedUser { name, violation });
+    }
+
+fn dantca_help(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
+        let help_message = format!("
+    [color=#ffffff]Hallo @{}, there is guide for Dantca bot[/color]
+    [color=#00FF00]dantcago![/color] = Active Dantca Bot
+    [color=#00FF00]dantcaoff![/color] = Deactive Dantca Bot
+    [color=#00FF00]statusdan![/color] = Check Dantca Bot Status
+    [color=#00FF00]dantcahelp![/color] = Dantca Bot Help
+    [color=#00FF00]reportdan![/color] = for report kicked user
+    [color=#00FF00]/public askdan-?[/color] = ask dantca bot for something but public
+    [color=#00FF00]/pm askdan-?[/color] = ask dantca bot for something but pm
+    [color=#00FF00]/members askdan-?[/color] = ask dantca bot for something but members
+    [color=#00FF00]danhelp![/color] = for guest
+    without (-)
+    ", from);
+    tx.send(PostType::Post(help_message, Some(SEND_TO_MEMBERS.to_owned())
+    )).unwrap();
+
+}
+fn dantca_guest_proses(from: &str, tx: &crossbeam_channel::Sender<PostType>) { 
+    let msg_help = format!("
+    [color=#ffffff]Hallo @{}, there is guide for Dantca bot ai[/color]
+    [color=#00FF00]/pm askdan-?[/color] = ask dantca bot for something on the pm
+    [color=#00FF00]/public askdan-?[/color] = ask dantca bot for something but public
+    [color=#00FF00]/danhelp![/color] = for guest guide bot dantca
+    without (-)
+    ", from);
+    tx.send(PostType::Post(msg_help, Some(SEND_TO_ALL.to_owned()))).unwrap();  
+    }
+
+// Fungsi untuk mengatur BOT_ACTIVE dan REMOVE_NAME
+
+fn toggle_bot_active(active: bool, tx: &crossbeam_channel::Sender<PostType>, from: &str) {
+    unsafe {
+        BOT_ACTIVE = active;
+        REMOVE_NAME = active;
+    }
     
-    // BHC Member Name Abuse prevention...
+    let status = if active { "Activated" } else { "Deactivated" };
+    let message = format!(">> -- [color=#ffffff]Dantca Has Been {} By[/color] - [@{}] -- <", status, from);
     
-    // userid we want never...
-    let gay_rgx = Regex::new(r#"gay[0-9a-zA-Z]*"#).unwrap();
-    
-    //let ephemeral_rgx1 = Regex::new(r#"[a-zA-Z0-9]*xo[a-zA-Z0-9]*xo[a-zA-Z0-9]*"#).unwrap();
-    
-    // userid of members
-    let rexe_rgx = Regex::new(r#"[0-9a-zA-Z]*rex[0-9a-zA-Z]+"#).unwrap();
-    let lukee_rgx = Regex::new(r#"lukee[0-9a-zA-Z]+"#).unwrap();
-    let lulu_rgx = Regex::new(r#"lulu[0-9a-zA-Z]+"#).unwrap();
-    // BHC Member Name Abuse prevention...end.
+    if let Err(e) = tx.send(PostType::Post(message, Some(SEND_TO_MEMBERS.to_owned()))) {
+        eprintln!("Gagal mengirim pesan: {:?}", e);
+    }
+
+ 
+}
 
 
+// Komentar: Fungsi check_bot_status sekarang menggunakan is_bot_active()
+fn check_bot_status(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
+    let status_message = if unsafe { BOT_ACTIVE } {
+        "> - Dantca Still Running - <"
+    } else {
+        "> - Dantca Not Running - <"
+    };
+    let messtats = format!(" [color=#ffffff] {} == [/color] [ @{} ]", status_message, from);
+    tx.send(PostType::Post(messtats, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
+}
+fn dantcasilent(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
+    
+    let msg_lower = msg.to_lowercase();
+    let from_lower = from.to_lowercase();
+    
+    if let Some((_color, _username)) = users.guests.iter().find(|(_color, name)| name.to_lowercase() == from_lower) {
+        let username_to_kick = from_lower.clone();
+        let (kicked, warns, msgcopy) = silentkick(&msg_lower);
+        if kicked {
+            let msgkicked = format!("{} - > {}", username_to_kick, msgcopy);
+            // Kirim pesan ke anggota
+            tx.send(PostType::Post(msgkicked, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
+            // Kirim perintah kick
+            tx.send(PostType::Kick(format!("Kicked by Dantca bot: {}", warns), username_to_kick.clone())).unwrap();
             
+            // Tambahkan pengguna yang di-kick ke daftar
+        }
+    }
+}
+fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
+    let msg_lower = msg.to_lowercase();
+    let from_lower = from.to_lowercase();
+    // filer untuk membantu gusest dalam hal apapun
+
+
+
+    if let Some((_color, _username)) = users.guests.iter().find(|(_color, name)| name.to_lowercase() == from_lower) {
+        let username_to_kick = from_lower.clone();
+        let (triggered, kicked, warns, help, message) = check_message_content(&msg_lower);
+        
+        let mut warned_users = WARNED_USERS.lock().unwrap();
+        let count = warned_users.entry(from_lower.clone()).or_insert(0);
+        
+        if triggered {
+            *count += 1;
+            tx.send(PostType::Post(format!(">>> Dantca :  Hallo @{}, ->  [color=#ffffff] you have warns : [/color] [color=#00FF00]| {}/2 |[/color] -> Your Warnings :  {} [BANNED TOPIC]-< [LAST WARNS] <<<", username_to_kick, *count, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
+        }
+        
+        if *count >= 2 {
+            tx.send(PostType::Kick(format!(">>> Dantca : Hallo  @{},[color=#ffffff] You have been warned multiple warns | = {} = |times and are now being kicked. BYE BYE !![/color] <<< ", username_to_kick, *count), username_to_kick.clone())).unwrap();
+            add_kicked_user(username_to_kick.clone(), format!("Multiple warnings: {}", warns));
+        }
+        
+        if kicked {
+            tx.send(PostType::Post(format!(">>> Dantca :  Hallo @{}, [color=#ffffff]-> your warnings: {} [BANNED TOPIC]-< BYE! BYE![/color]  <<<", username_to_kick, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
+            tx.send(PostType::Kick(format!("Kicked by Dantca bot: {}", warns), username_to_kick.clone())).unwrap();
+            add_kicked_user(username_to_kick.clone(), warns.to_string());
+        }
+        if help {
+let msh = format!("Hallo @{}, {}", from, message);
+            tx.send(PostType::Post(msh, Some(SEND_TO_ALL.to_owned()))).unwrap();
+        }
+    }
+}
+fn silentkick(msg: &str) -> (bool, String, String) {
+    let mut kicked = false;
+    let mut warns = String::new();
+    let msgcopy = msg.to_lowercase();
+    
+
+    if msgcopy.contains("betting") &&
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Betting is frowned upon here".to_string();
+        kicked = true;
+    } if (msgcopy.contains("buy ") || msgcopy.contains("sell ")) && msgcopy.contains("gun") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Munitions and talk thereof is a ".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("porn") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("link ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("favorite ")
+            || msgcopy.contains("lookin ") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Porn is a ".to_string();
+        kicked = true;
+    }
+    
+    if msgcopy.contains("torture") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Torture is a ".to_string();
+        kicked = true;
+    }        
+    
+    if msgcopy.contains("cock ") && (!msgcopy.contains("cock.li")) &&
+        ( 
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        )
+    {
+        warns = "Poor taste".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("hack") && (msgcopy.contains(" fb ") || msgcopy.contains(" insta ") || msgcopy.contains(" twitter ") || msgcopy.contains(" facebook ") || msgcopy.contains(" instagram ")) &&
+        ( 
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+            || msgcopy.contains("how ")
+        ) 
+    {
+        warns = "Social Media Hacking is bad form ".to_string();
+        kicked = true;
+    }                 
+    if msgcopy.contains("cp ") && 
+        ( 
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "CP is a ".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("rape ") && 
+        ( 
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin ") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Rape is a ".to_string();
+        kicked = true;
+    }
+    if ( msgcopy.contains("loli") || msgcopy.contains("child") || msgcopy.contains("minor") ) && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("link ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        )
+    {
+        warns = "CSAM is a ".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("sex") && msgcopy.contains("cam") {
+        warns = "Sex Cams are poor taste".to_string();
+        kicked = true;
+    }                    
+    if ( msgcopy.contains("buy") || msgcopy.contains("sell") ) && ( msgcopy.contains("human") ) {
+        warns = "Human sales is poor taste".to_string();
+        kicked = true;
+    }                                            
+    if msgcopy.contains("market") && ( msgcopy.contains("black") || msgcopy.contains("under") ) {
+        warns = "Markets are bad, 98% are scams".to_string();
+        kicked = true;
+    }
+
+
+    if msgcopy.contains("p5hwh3fxfb4x22rpmgq32c3xps6g6k6rvmualzj4gwvxs5ovjhbd4fyd.onion") {
+        warns = "We don't like your link.".to_string();
+        kicked = true;
+    } 
+
+    if ( msgcopy.contains("hitman") || msgcopy.contains("hitmen") ) && 
+        (     
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Hitmen have nothing to do with us LOL".to_string();
+        kicked = true;
+    }        
+    if msgcopy.contains("nogg") || msgcopy.contains("niqq") || msgcopy.contains("nigg") || msgcopy.contains("nigga") || msgcopy.contains("nigge") || msgcopy.contains("niggo") || msgcopy.contains("niggi") || msgcopy.contains("niggu")  {
+        warns = "Offensive terms are bad form.".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("indian") &&
+        ( 
+            msgcopy.contains("ni") ||
+            msgcopy.contains("shit") ||
+            msgcopy.contains("fuck") 
+        ) 
+    {
+        warns = "Racial Insults won't be tolerated.".to_string();
+        kicked = true;
+    }             
+    if msgcopy.contains("bomb ") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")            
+        ) 
+    {
+        warns = "Munitions is a ".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("database") || msgcopy.contains("db") && msgcopy.contains("dump") &&
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Databases are not us. Be gone.".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("paypal") && msgcopy.contains("transfer") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Paypal - not here PAL! Be gone.".to_string();
+        kicked = true;
+    }
+    if (msgcopy.contains("cc ") || msgcopy.contains("credit ") || msgcopy.contains("card ")) && 
+        (
+            msgcopy.contains("make") || 
+            msgcopy.contains("dump") ||
+            msgcopy.contains("where") || 
+            msgcopy.contains("want") || 
+            msgcopy.contains("lookin") || 
+            msgcopy.contains("know") ||         		
+            msgcopy.contains("have") ||
+            msgcopy.contains("sell") ||
+            msgcopy.contains("share") ||
+            msgcopy.contains("buy")
+        ) 
+    {
+        warns = "Carding is a".to_string();
+        kicked = true;
+    }
+    if msgcopy.contains("tabularis") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Tabularis - not here! Be gone... BYE BYE...".to_string();
+        kicked = true;
+    }
+    // fuck logic
+    if (msgcopy.contains("fuck") || msgcopy.contains("fucking") || msgcopy.contains("fucks")) && 
+    (msgcopy.contains("all" )
+     || msgcopy.contains("everyone") 
+     || msgcopy.contains("everybody")
+      || msgcopy.contains("members") 
+      || msgcopy.contains("staff")
+       || msgcopy.contains("admin")){
+        warns = "dont used a bad word ~dantca bot".to_string();
+        kicked = true;
+    }
+    // Memeriksa apakah pesan mengandung kata terlarang
+    if msgcopy.contains("indog") || msgcopy.contains("jokowi") || (msgcopy.contains("islam") && msgcopy.contains("fuck")) {
+        warns = "dont used a bad word ~dantca bot".to_string();
+        kicked = true;
+    }
+    // satu kata  logic kicked
+    match msgcopy.as_str() {
+        "porn" | "child porn" | "cp" | "gore" | "fuck" | "carding" | "horny" | "bitch" | "cock" | "cocaine" => {
+            // Pesan peringatan untuk konten yang tidak pantas
+            warns = "Bye Bye !!kicked by dantca bot".to_string();
+            kicked = true;
+        },
+        _ => {}
+    }
+ 
+    (kicked, warns, msgcopy)
+}
+
+fn check_message_content(msg: &str) -> (bool, bool, &str, bool, &str) {
+    let msgcopy = msg.to_lowercase();
+    let mut triggered = false;
+    let mut kicked = false;
+    let mut help = false;
+    let mut warns = "";
+    let mut mass = "";
+
+    if msgcopy.contains("betting") &&
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Betting is frowned upon here";
+        triggered = true;
+    } if (msgcopy.contains("buy ") || msgcopy.contains("sell ")) && msgcopy.contains("gun") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Munitions and talk thereof is a ";
+        triggered = true;
+    }
+    if msgcopy.contains("porn") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("link ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("favorite ")
+            || msgcopy.contains("lookin ") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Porn is a ";
+        triggered = true;
+    }
+    
+    if msgcopy.contains("torture") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Torture is a ";
+        triggered = true;
+    }        
+    
+    if msgcopy.contains("cock ") && (!msgcopy.contains("cock.li")) &&
+        ( 
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        )
+    {
+        warns = "Poor taste";
+        triggered = true;
+    }
+    if msgcopy.contains("hack") && (msgcopy.contains(" fb ") || msgcopy.contains(" insta ") || msgcopy.contains(" twitter ") || msgcopy.contains(" facebook ") || msgcopy.contains(" instagram ")) &&
+        ( 
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+            || msgcopy.contains("how ")
+        ) 
+    {
+        warns = "Social Media Hacking is bad form ";
+        triggered = true;
+    }                 
+    if msgcopy.contains("cp ") && 
+        ( 
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "CP is a ";
+        kicked = true;
+    }
+    if msgcopy.contains("rape ") && 
+        ( 
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin ") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Rape is a ";
+        triggered = true;
+    }
+    if ( msgcopy.contains("loli") || msgcopy.contains("child") || msgcopy.contains("minor") ) && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("link ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        )
+    {
+        warns = "CSAM is a ";
+        kicked = true;
+    }
+    if msgcopy.contains("sex") && msgcopy.contains("cam") {
+        warns = "Sex Cams are poor taste";
+        triggered = true;
+    }                    
+    if ( msgcopy.contains("buy") || msgcopy.contains("sell") ) && ( msgcopy.contains("human") ) {
+        warns = "Human sales is poor taste";
+        triggered = true;
+    }                                            
+    if msgcopy.contains("market") && ( msgcopy.contains("black") || msgcopy.contains("under") ) {
+        warns = "Markets are bad, 98% are scams";
+        triggered = true;
+    }
+
+
+    if msgcopy.contains("p5hwh3fxfb4x22rpmgq32c3xps6g6k6rvmualzj4gwvxs5ovjhbd4fyd.onion") {
+        warns = "We don't like your link.";
+        kicked = true;
+    } 
+
+    if ( msgcopy.contains("hitman") || msgcopy.contains("hitmen") ) && 
+        (     
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Hitmen have nothing to do with us LOL";
+        kicked = true;
+    }        
+    if msgcopy.contains("nogg") || msgcopy.contains("niqq") || msgcopy.contains("nigg") || msgcopy.contains("nigga") || msgcopy.contains("nigge") || msgcopy.contains("niggo") || msgcopy.contains("niggi") || msgcopy.contains("niggu")  {
+        warns = "Offensive terms are bad form.";
+        kicked = true;
+    }
+    if msgcopy.contains("indian") &&
+        ( 
+            msgcopy.contains("ni") ||
+            msgcopy.contains("shit") ||
+            msgcopy.contains("fuck") 
+        ) 
+    {
+        warns = "Racial Insults won't be tolerated.";
+        kicked = true;
+    }             
+    if msgcopy.contains("bomb ") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")            
+        ) 
+    {
+        warns = "Munitions is a ";
+        kicked = true;
+    }
+    if msgcopy.contains("database") || msgcopy.contains("db") && msgcopy.contains("dump") &&
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Databases are not us. Be gone.";
+        kicked = true;
+    }
+    if msgcopy.contains("paypal") && msgcopy.contains("transfer") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Paypal - not here PAL! Be gone.";
+        kicked = true;
+    }
+    if (msgcopy.contains("cc ") || msgcopy.contains("credit ") || msgcopy.contains("card ")) && 
+        (
+            msgcopy.contains("make") || 
+            msgcopy.contains("dump") ||
+            msgcopy.contains("where") || 
+            msgcopy.contains("want") || 
+            msgcopy.contains("lookin") || 
+            msgcopy.contains("know") ||         		
+            msgcopy.contains("have") ||
+            msgcopy.contains("sell") ||
+            msgcopy.contains("share") ||
+            msgcopy.contains("buy")
+        ) 
+    {
+        warns = "Carding is a";
+        kicked = true;
+    }
+    if msgcopy.contains("tabularis") && 
+        (
+            msgcopy.contains("where ")
+            || msgcopy.contains("want ")
+            || msgcopy.contains("lookin") 
+            || msgcopy.contains("know ")
+            || msgcopy.contains("have ")
+            || msgcopy.contains("need ")
+        ) 
+    {
+        warns = "Tabularis - not here! Be gone... BYE BYE...";
+        kicked = true;
+    }
+    // fuck logic
+    if (msgcopy.contains("fuck") || msgcopy.contains("fucking") || msgcopy.contains("fucks")) && 
+    (msgcopy.contains("all" )
+     || msgcopy.contains("everyone") 
+     || msgcopy.contains("everybody")
+      || msgcopy.contains("members") 
+      || msgcopy.contains("staff")
+       || msgcopy.contains("admin")){
+        warns = "dont used a bad word ~dantca bot";
+        kicked = true;
+    }
+    // satu kata  logic kicked
+    match msgcopy.as_str() {
+        "porn" | "child porn" | "cp" | "gore" | "fuck" | "carding" | "horny" | "bitch" | "cock" | "cocaine" => {
+            // Pesan peringatan untuk konten yang tidak pantas
+            warns = "Bye Bye !!kicked by dantca bot";
+            kicked = true;
+        },
+        _ => {}
+    }
+    if msgcopy.len() > 1000 {
+        warns = "Message too long (over 1000 characters). if is the filter you can try send to @0 user";
+        triggered = true;
+    }
+    if msgcopy.contains("link ") && 
+    (msgcopy.contains("want ") 
+     || msgcopy.contains("need ")
+     || msgcopy.contains("have ")
+     || msgcopy.contains("how ")
+     || msgcopy.contains("lookin ")
+     || msgcopy.contains("? ")) {
+        mass = "you can try command !-links !-sites for get link and send to @0";
+        help = true;
+    }
+    if msgcopy.contains("@0 ") && 
+      (msgcopy.contains("how ") 
+     ||msgcopy.contains("whare ") 
+     ||msgcopy.contains("who ")) {
+        mass  = "if you want to send message to @0 you can click all-chatters and select @0 then send your commmand to him";
+        help = true;
+    }
+
+    (triggered, kicked, warns, help ,mass)
+}
+fn ban_imposters(tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
+    let (bot_active, remove_name) = unsafe { (BOT_ACTIVE, REMOVE_NAME || BOT_ACTIVE) };
+
+    if !bot_active && !remove_name {
+        return;
+    }
+
+
+
+    let banned_patterns = [
+        (Regex::new(r"(?i)n[o0]tr[1il][vy]").unwrap(), "n0tr1v"),
+        (Regex::new(r"(?i)h[i1]t[l1]er").unwrap(), "hitler"),
+        (Regex::new(r"(?i)h[i1]m+l[e3]r").unwrap(), "himmler"),
+        (Regex::new(r"(?i)m[e3]ng[e3]l[e3]").unwrap(), "mengele"),
+        (Regex::new(r"(?i)g[o0]b+[e3]ls").unwrap(), "goebbels"),
+        (Regex::new(r"(?i)h[e3]ydr[i1]ch").unwrap(), "heydrich"),
+        (Regex::new(r"(?i)gl[o0]b[o0]cn[i1l]k").unwrap(), "globocnik"),
+        (Regex::new(r"(?i)d[i1]rl[e3]wang[e3]r").unwrap(), "dirlewanger"),
+        (Regex::new(r"(?i)j[e3]ck[e3]ln").unwrap(), "jeckeln"),
+        (Regex::new(r"(?i)kram[e3]r").unwrap(), "kramer"),
+        (Regex::new(r"(?i)bl[o0]b[e3]l").unwrap(), "blobel"),
+        (Regex::new(r"(?i)stangl").unwrap(), "stangl"),
+        (Regex::new(r"(?i)\b(pedo|cp|danbyt|bigdick|bitch|kill|killer|dick|trolls|child\s*porn|hamas|pussy|cum|pedofile|fucked|lolita\s*slaves|fuck\s*all|fucking|bomb|fuckings)\b").unwrap(), "general blacklist"),
+    ];
+
+    let xpldan_patterns = Regex::new(r"(?i)\b(fuck|xpldan|nigg[iuaoe]|nig[iuao]|niqq|chink|wank|shit|cunt|bitch|booty|hooker|milf|rapist|balls|sex|childporn|cocaine|heroine|weed|drug|card|fisting|jerk|p3do|pedo|cplove|perv|gangbang|porn|dick|penis|puzzy|pussy|boceta|anal|cum|market|sell|fraud|DN37R34P3R|atomwaffen|altright)\b").unwrap();
+
+    let kicked_words = ["dick", "penis", "bitch", "fuck", "fucking", "cock"];
+
     for (_color, username) in &users.guests {
         let lower_name = username.to_lowercase();
-        // Names that anyone using bhcli will ban
-         let kickeroo_id = username.to_owned();
-            
-            if (
-                lower_name.contains("fuck")    
-            
-                || lower_name.contains("hitler")
-                || lower_name.contains("himler")
-                || lower_name.contains("nazi")
-                || lower_name.contains("kyke")
-                || lower_name.contains("kike")
-                || lower_name.contains("ekik")
-    
-                || lower_name.contains("niggi")
-                || lower_name.contains("niggu")
-                || lower_name.contains("nigge")
-                || lower_name.contains("nigga")
-                || lower_name.contains("niggo")
-                || lower_name.contains("niggg")
-                || lower_name.contains("niglet")
-        
-                || lower_name.contains("nigi")
-                || lower_name.contains("nigu")
-                || lower_name.contains("niga")
-                || lower_name.contains("nigo")
-                || lower_name.contains("niqq")
-                
-                || lower_name.contains("chink")
-        
-                || lower_name.contains("wank")
-                || lower_name.contains("shit")
-                || lower_name.contains("cunt")
-                || lower_name.contains("bitch")
-                || lower_name.contains("booty")
-                || lower_name.contains("hooker")
-                || lower_name.contains("milf")
-                || lower_name.contains("rapist")
 
-                || lower_name.contains("balls")
-                || lower_name.contains("cock")
-                
-                || lower_name.contains("sex")
-        
-                || lower_name.contains("cocaine")
-                || lower_name.contains("heroine")
-                || lower_name.contains("weed")
-                || lower_name.contains("drug")              
-        
-                || lower_name.contains("card")
-        
-                || lower_name.contains("fisting")
-                || lower_name.contains("jerk")
-        
-                || lower_name.contains("p3do")
-                || lower_name.contains("pedo")
-                || lower_name.contains("cplove")
-                || lower_name.contains("perv")
+        if users.members.iter().any(|(_, member)| member.len() >= 2 && lower_name.contains(&member.to_lowercase())) {
+            let msg = format!("Username members BHC '{}' is not allowed. dont to be imposter LOL ~ Dantca bot", username);
+            tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
+            continue;
+        }
 
-                || lower_name.contains("gore")
-                                
-                || lower_name.contains("gangbang")
-                || lower_name.contains("porn")
-                || lower_name.contains("dick")
-                || lower_name.contains("penis")
-                || lower_name.contains("puzzy")
-                || ( lower_name.contains("pussy") && !(lower_name.contains("pussycat")) )
-                || lower_name.contains("boceta")  // boceta is pussy in some lang
-                || ( lower_name.contains("anal") && (lower_name.len() == 4) )
-                || lower_name.contains("cum")
-        
-                || lower_name.contains("market")
-                || lower_name.contains("sell")
-                || lower_name.contains("fraud")
-                
-                // REGEX match / kick
-                || n0tr1v_rgx.is_match(&lower_name)
-                || hitler_rgx.is_match(&lower_name)
-                || goebbels_rgx.is_match(&lower_name)
-                || himmler_rgx.is_match(&lower_name)
-                || mengele_rgx.is_match(&lower_name)
-                || heydrich_rgx.is_match(&lower_name)
-                || globocnik_rgx.is_match(&lower_name)
-                || dirlewanger_rgx.is_match(&lower_name)
-                || jeckeln_rgx.is_match(&lower_name)
-                || kramer_rgx.is_match(&lower_name)
-                || blobel_rgx.is_match(&lower_name)
-                || stangl_rgx.is_match(&lower_name)
-                || rapist_rgx.is_match(&lower_name)
-                || molester_rgx.is_match(&lower_name)
-                || rexe_rgx.is_match(&lower_name)
-                || gay_rgx.is_match(&lower_name)
-                || lulu_rgx.is_match(&lower_name)
-                || gottil_rgx.is_match(&lower_name)                
-                || lukee_rgx.is_match(&lower_name)  
-             )         
-        {
-            let xplwarn = "Offensive Nick";
-            let msg = &format!("{}{} {} {} {}", ">>> --- Luke... @", username.to_string(), " : WARNING : ", xplwarn, " --- <<< ");
-                            
-            tx.send(PostType::Post(msg.to_owned(), Some(SEND_TO_ALL.to_owned()))).unwrap();
-            
-            let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-            let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();                            
-            stream_handle.play_raw(source.convert_samples()).unwrap();
-            
-            tx.send(PostType::Kick("Bye Bye... Offensive Nick".to_string(), kickeroo_id)).unwrap();    
+        if banned_patterns.iter().any(|(pattern, _)| pattern.is_match(&lower_name)) {
+            let msg = format!("Do not use names on the blacklist '{}' . ~Dantca bot", lower_name);
+            tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
+            continue;
+        }
+
+        if kicked_words.iter().any(|&word| lower_name.contains(word)) || xpldan_patterns.is_match(&lower_name) {
+            let msg = format!("Do not use names on the blacklist '{}'. ~Dantca bot", lower_name);
+            tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
+
+            // cek kata kata
+        }
+        if lower_name == XPLDAN {
+            let msg = format!("Dont to be me LOL, Dantca can See You lol.. ~dantca Bot.. dont used again = {} = ",lower_name);
+            tx.send(PostType::Kick(msg, username.to_owned())).unwrap();
         }
     }
 }
@@ -3068,8 +3116,9 @@ fn update_messages(
             old_msg_ptr += 1;
             break;
         }
+
     }
-    messages.truncate(1000);
+    messages.truncate(5000);
 }
 
 fn delete_message(
@@ -3147,13 +3196,12 @@ fn new_default_le_chat_php_client(params: Params) -> LeChatPHPClient {
         last_key_event: None,
         client: params.client,
         manual_captcha: params.manual_captcha,
-        sxiv: params.sxiv,
         refresh_rate: params.refresh_rate,
         config: LeChatPHPConfig::new_black_hat_chat_config(),
         is_muted: Arc::new(Mutex::new(false)),
         show_sys: false,
         display_guest_view: false,
-        //display_member_view: false,
+        display_member_view: false,
         display_hidden_msgs: false,
         tx,
         rx: Arc::new(Mutex::new(rx)),
@@ -3177,7 +3225,6 @@ struct Params {
     guest_color: String,
     client: Client,
     manual_captcha: bool,
-    sxiv: bool,
     refresh_rate: u64,
     max_login_retry: isize,
     keepalive_send_to: Option<String>,
@@ -3303,39 +3350,6 @@ pub struct DkfNotifierResp {
     pub last_message_created_at: String,
 }
 
-fn start_dkf_notifier(client: &Client, dkf_api_key: &str) {
-    let client = client.clone();
-    let dkf_api_key = dkf_api_key.to_owned();
-    let mut last_known_date = Utc::now();
-    thread::spawn(move || loop {
-        let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-        let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();
-
-        let params: Vec<(&str, String)> = vec![(
-            "last_known_date",
-            last_known_date.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        )];
-        let right_url = format!("{}/api/v1/chat/1/notifier", DKF_URL);
-        if let Ok(resp) = client
-            .post(right_url)
-            .form(&params)
-            .header("DKF_API_KEY", &dkf_api_key)
-            .send()
-        {
-            if let Ok(txt) = resp.text() {
-                if let Ok(v) = serde_json::from_str::<DkfNotifierResp>(&txt) {
-                    if v.pm_sound || v.tagged_sound {
-                        stream_handle.play_raw(source.convert_samples()).unwrap();
-                    }
-                    last_known_date = DateTime::parse_from_rfc3339(&v.last_message_created_at)
-                        .unwrap()
-                        .with_timezone(&Utc);
-                }
-            }
-        }
-        thread::sleep(Duration::from_secs(5));
-    });
-}
 
 // Start thread that looks for new emails on DNMX every minutes.
 fn start_dnmx_mail_notifier(client: &Client, username: &str, password: &str) {
@@ -3370,6 +3384,7 @@ fn start_dnmx_mail_notifier(client: &Client, username: &str, password: &str) {
     });
 }
 
+//Strange
 #[derive(Debug, Deserialize)]
 struct Commands {
     commands: HashMap<String, String>,
@@ -3383,6 +3398,7 @@ impl Default for Commands {
     }
 }
 
+// Strange
 // Function to read the configuration file and parse it
 fn read_commands_file(file_path: &str) -> Result<Commands, Box<dyn std::error::Error>> {
     // Read the contents of the file
@@ -3408,9 +3424,6 @@ fn main() -> anyhow::Result<()> {
         println!("Config path: {:?}", config_path);
     }
     if let Ok(cfg) = confy::load::<MyConfig>("bhcli", None) {
-        if opts.dkf_api_key.is_none() {
-            opts.dkf_api_key = cfg.dkf_api_key;
-        }
         if let Some(default_profile) = cfg.profiles.get(&opts.profile) {
             if opts.username.is_none() {
                 opts.username = Some(default_profile.username.clone());
@@ -3440,9 +3453,6 @@ fn main() -> anyhow::Result<()> {
         start_dnmx_mail_notifier(&client, &dnmx_username, &opts.dnmx_password.unwrap())
     }
 
-    if let Some(dkf_api_key) = &opts.dkf_api_key {
-        start_dkf_notifier(&client, dkf_api_key);
-    }
 
     let guest_color = get_guest_color(opts.guest_color);
     let username = ask_username(opts.username);
@@ -3458,7 +3468,6 @@ fn main() -> anyhow::Result<()> {
         guest_color,
         client: client.clone(),
         manual_captcha: opts.manual_captcha,
-        sxiv: opts.sxiv,
         refresh_rate: opts.refresh_rate,
         max_login_retry: opts.max_login_retry,
         keepalive_send_to: opts.keepalive_send_to,
@@ -3474,17 +3483,18 @@ fn main() -> anyhow::Result<()> {
 
 #[derive(Debug, Clone)]
 enum PostType {
-    Post(String, Option<String>),   // Message, SendTo
-    Kick(String, String),           // Message, Username
-    Upload(String, String, String), // FilePath, SendTo, Message
-    DeleteLast,                     // DeleteLast
-    DeleteAll,                      // DeleteAll
-    NewNickname(String),            // NewUsername
-    NewColor(String),               // NewColor
-    Profile(String, String),        // NewColor, NewUsername
-    Ignore(String),                 // Username
-    Unignore(String),               // Username
-    Clean(String, String),          // Clean message
+    Post(String, Option<String>),   // Pesan, KirimKe
+    Kick(String, String),           // Pesan, NamaPengguna
+    Upload(String, String, String), // LokasiFile, KirimKe, Pesan
+    DeleteLast,                     // HapusTerakhir
+    DeleteAll,                      // HapusSemua
+    NewNickname(String),            // NamaPenggunaBaru
+    NewColor(String),               // WarnaBaru
+    Profile(String, String),        // WarnaBaru, NamaPenggunaBaru
+    Ignore(String),                 // NamaPengguna
+    Inbox,                          // KotakMasuk
+    Unignore(String),               // NamaPengguna
+    Clean(String, String),          // PesanBersih
 }
 
 // Get username of other user (or ours if it's the only one)
@@ -3504,7 +3514,7 @@ fn get_username(own_username: &str, root: &StyledText, members_tag: &str) -> Opt
 }
 
 // Extract "from"/"to"/"message content" from a "StyledText"
-fn get_message(root: &StyledText, members_tag: &str) -> Option<(String, Option<String>, String)> {
+fn get_message(root: &StyledText, members_tag: &str ) -> Option<(String, Option<String>, String)> {
     if let StyledText::Styled(_, children) = root {
         let msg = children.get(0)?.text();
         match children.get(children.len() - 1)? {
@@ -3741,19 +3751,8 @@ impl Users {
         out
     }
 
-    fn num_guests(&self) -> String {
-        let result = format!("{}", self.guests.len());
-        result
-        //u32::from(self.guests.len())
-    }
-
     fn is_guest(&self, name: &str) -> bool {
         self.guests.iter().find(|(_, username)| username == name).is_some()
-    }
-    
-    fn is_member(&self, name: &str) -> bool {
-        self.members.iter().find(|(_, username)| username == name).is_some() 
-        || self.staff.iter().find(|(_, username)| username == name).is_some() 
     }
 }
 
@@ -3794,6 +3793,7 @@ fn extract_users(doc: &Document) -> Users {
     users
 }
 
+
 fn remove_suffix<'a>(s: &'a str, suffix: &str) -> &'a str {
     s.strip_suffix(suffix).unwrap_or(s)
 }
@@ -3802,40 +3802,129 @@ fn remove_prefix<'a>(s: &'a str, prefix: &str) -> &'a str {
     s.strip_prefix(prefix).unwrap_or(s)
 }
 
-fn extract_messages(doc: &Document) -> anyhow::Result<Vec<Message>> {
+// Variabel statis untuk menyimpan jumlah pesan di inbox
+static mut INBOX_COUNT: usize = 0;
 
-    let kicked_count = count_kicked_users(doc);
+// Variabel statis untuk menyimpan isi pesan inbox
+
+
+
+fn extract_messages(doc: &Document) -> anyhow::Result<Vec<Message>> {
     unsafe {
-        KICKED_COUNT = kicked_count as u32;
+        let (kicked_count, new_username) = count_kicked_users(doc);
+        KICKED_COUNT = kicked_count as usize;
+        NEW_USER = new_username;
     }
-    
-    let msgs = doc
-        .find(Attr("id", "messages"))
-        .next()
-        .ok_or(anyhow!("failed to get messages div"))?
-        .find(Attr("class", "msg"))
-        .filter_map(|tag| {
-            let mut id: Option<usize> = None;
-            if let Some(checkbox) = tag.find(Name("input")).next() {
-                let id_value: usize = checkbox.attr("value").unwrap().parse().unwrap();
-                id = Some(id_value);
-            }
-            if let Some(date_node) = tag.find(Name("small")).next() {
-                if let Some(msg_span) = tag.find(Name("span")).next() {
-                    let date = remove_suffix(&date_node.text(), " - ").to_owned();
-                    let typ = match msg_span.attr("class") {
-                        Some("usermsg") => MessageType::UserMsg,
-                        Some("sysmsg") => MessageType::SysMsg,
-                        _ => return None,
-                    };
-                    let (text, upload_link) = process_node(msg_span, tuiColor::White);
-                    return Some(Message::new(id, typ, date, upload_link, text));
+    // Ekstrak jumlah pesan dari notifikasi
+    if let Some(notifications) = doc.find(Attr("id", "notifications")).next() {
+        if let Some(form) = notifications.find(Name("form")).next() {
+            if let Some(submit_button) = form.find(Name("input")).filter(|input| input.attr("type") == Some("submit")).next() {
+                if let Some(value) = submit_button.attr("value") {
+                    if let Some(count_str) = value.split_whitespace().nth(1) {
+                        if let Ok(count) = count_str.parse::<usize>() {
+                            unsafe {
+                                INBOX_COUNT = count;
+                            }
+                        }
+                    }
                 }
             }
-            None
+        }
+    }
+
+    Ok(doc.find(Attr("id", "messages"))
+        .next()
+        .ok_or_else(|| anyhow!("Gagal mendapatkan div pesan"))?
+        .find(Attr("class", "msg"))
+        .filter_map(|tag| {
+            let id = tag.find(Name("input")).next().and_then(|checkbox| checkbox.attr("value")).and_then(|value| value.parse().ok());
+            let date_node = tag.find(Name("small")).next()?;
+            let msg_span = tag.find(Name("span")).next()?;
+            let date = remove_suffix(&date_node.text(), " - ").to_owned();
+            let typ = match msg_span.attr("class") {
+                Some("usermsg") => MessageType::UserMsg,
+                Some("sysmsg") => MessageType::SysMsg,
+                _ => return None,
+            };
+            let (text, upload_link) = process_node(msg_span, tuiColor::White);
+            let message = Message::new(id, typ, date, upload_link, text);
+        
+            Some(message)
         })
-        .collect::<Vec<_>>();
-    Ok(msgs)
+        .collect())
+}
+
+// Fungsi untuk mengirim pesan sambutan kepada pengguna baru
+// Fungsi untuk mengirim pesan sambutan kepada pengguna baru
+// Fungsi untuk mengekstrak pengguna baru dan mengirim pesan sambutan
+
+// Fungsi untuk menghitung jumlah pengguna yang di-kick
+// Variabel global untuk menyimpan nama pengguna baru
+static mut NEW_USER: Option<String> = None;
+fn count_kicked_users(doc: &Document) -> (usize, Option<String>) {
+    let kicked_count = doc.find(Attr("id", "messages"))
+        .next()
+        .map(|messages| {
+            messages.find(Attr("class", "msg"))
+                .filter(|node| node.text().contains("has been kicked."))
+                .count()
+        })
+        .unwrap_or(0);
+    let new_username = doc.find(Attr("id", "messages"))
+        .next()
+        .and_then(|messages| {
+            messages.find(Attr("class", "msg"))
+                .filter(|node| node.text().contains("has joined the chat."))
+                .last()
+                .and_then(|node| {
+                    let text = node.text();
+                    let parts: Vec<&str> = text.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        Some(parts[0].to_string())
+                    } else {
+                        None
+                    }
+                })
+        });
+    (kicked_count, new_username)
+}
+
+// Fungsi untuk mengirim salam
+fn send_greeting(tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
+    let current_members: Vec<String> = users.members.iter().map(|(_, name)| name.clone()).collect();
+    let current_staff: Vec<String> = users.staff.iter().map(|(_, name)| name.clone()).collect();
+    // just guest lol
+    unsafe {
+        // Kamu bisa mencoba metode berbeda tanpa menggunakan banyak unsafe
+        static mut PREVIOUS_STAFF: Option<Vec<String>> = None;
+        static mut PREVIOUS_MEMBERS: Option<Vec<String>> = None;
+        
+        if let Some(prev_staff) = PREVIOUS_STAFF.as_ref() {
+            for staff in &current_staff {
+                if !prev_staff.contains(staff) {
+                    let welcome_msg = format!(
+                        "Dantca -> [color=#ffffff] Welcome back, @{}! (auto-message) do not reply count kicked in the session chat is: [/color] {} ", staff, KICKED_COUNT);
+                    tx.send(PostType::Post(welcome_msg, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
+                }
+            }
+        }
+        PREVIOUS_STAFF = Some(current_staff);
+        
+        if let Some(prev_members) = PREVIOUS_MEMBERS.as_ref() {
+            for member in &current_members {
+                if !prev_members.contains(member) {
+                    let welcome_msg = format!(
+                        "Dantca -> [color=#ffffff] Welcome back, @{}! (auto-message) do not reply count kicked in the session chat is: [/color] {} ", member, KICKED_COUNT);
+                    tx.send(PostType::Post(welcome_msg, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
+                    
+                    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+                    let source = Decoder::new_mp3(Cursor::new(SOUND1)).unwrap();                            
+                    stream_handle.play_raw(source.convert_samples()).unwrap();                     
+                }
+            }
+        }        
+        PREVIOUS_MEMBERS = Some(current_members);
+    }
 }
 
 fn draw_terminal_frame(
@@ -3846,10 +3935,15 @@ fn draw_terminal_frame(
     username: &str,
 ) {
     if app.long_message.is_none() {
+        let vchunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(5)].as_ref())
+            .split(f.size());
+
         let hchunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Min(1), Constraint::Length(25)].as_ref())
-            .split(f.size());
+            .split(vchunks[0]);
 
         {
             let chunks = Layout::default()
@@ -3869,6 +3963,9 @@ fn draw_terminal_frame(
             render_messages(f, app, chunks[2], messages);
             render_users(f, hchunks[1], users);
         }
+        
+        // Komentar: Menambahkan pemanggilan fungsi render_warned_users
+        render_warned_users(f, vchunks[1], users);
     } else {
         let hchunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -3882,50 +3979,55 @@ fn draw_terminal_frame(
 
 fn gen_lines(msg_txt: &StyledText, w: usize, line_prefix: &str) -> Vec<Vec<(tuiColor, String)>> {
     let txt = msg_txt.text();
-    let wrapped = textwrap::fill(&txt, w);
-    let splits = wrapped.split("\n").collect::<Vec<&str>>();
-    let mut new_lines: Vec<Vec<(tuiColor, String)>> = Vec::new();
-    let mut ctxt = msg_txt.colored_text();
-    ctxt.reverse();
+    let wrapped = textwrap::fill(&txt, w.saturating_sub(line_prefix.len()));
+    let splits: Vec<&str> = wrapped.split('\n').collect();
+    let mut new_lines = Vec::new();
+    let mut ctxt = msg_txt.colored_text().into_iter().rev().collect::<Vec<_>>();
     let mut ptr = 0;
     let mut split_idx = 0;
-    let mut line: Vec<(tuiColor, String)> = Vec::new();
+    let mut line = Vec::new();
     let mut first_in_line = true;
-    loop {
-        if let Some((color, mut txt)) = ctxt.pop() {
-            txt = txt.replace("\n", "");
-            if let Some(split) = splits.get(split_idx) {
-                if let Some(chr) = txt.chars().next() {
-                    if chr == ' ' && first_in_line {
-                        let skipped: String = txt.chars().skip(1).collect();
-                        txt = skipped;
-                    }
-                }
 
-                let remain = split.len() - ptr;
-                if txt.len() <= remain {
-                    ptr += txt.len();
-                    line.push((color, txt));
-                    first_in_line = false;
-                } else {
-                    line.push((color, txt));
-                    new_lines.push(line.clone());
-                    line.clear();
-                    line.push((tuiColor::White, line_prefix.to_owned()));
-                    //ctxt.push((color, txt);
-                    ptr = 0;
-                    split_idx += 1;
-                    first_in_line = true;
+    while let Some((color, txt)) = ctxt.pop() {
+        let txt = txt.replace('\n', "");
+        if let Some(split) = splits.get(split_idx) {
+            let txt = if first_in_line { txt.trim_start() } else { &txt };
+            let remain = split.len().saturating_sub(ptr);
+
+            // Pastikan kita tidak memotong di tengah karakter multibyte
+            let safe_len = txt.char_indices()
+                .take_while(|(i, _)| *i < remain)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(remain);
+
+            if txt.len() <= safe_len {
+                ptr += txt.len();
+                line.push((color, txt.to_string()));
+                first_in_line = false;
+            } else {
+                if safe_len > 0 {
+                    line.push((color, txt[..safe_len].to_string()));
                 }
+                new_lines.push(std::mem::replace(&mut line, vec![(tuiColor::White, line_prefix.to_string())]));
+                if safe_len < txt.len() {
+                    ctxt.push((color, txt[safe_len..].to_string()));
+                }
+                ptr = 0;
+                split_idx += 1;
+                first_in_line = true;
             }
         } else {
-            new_lines.push(line);
             break;
         }
     }
+
+    if !line.is_empty() {
+        new_lines.push(line);
+    }
+
     new_lines
 }
-
 fn render_long_message(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r: Rect) {
     if let Some(m) = &app.long_message {
         let new_lines = gen_lines(&m.text, (r.width - 2) as usize, "");
@@ -3953,80 +4055,42 @@ fn render_long_message(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut Ap
     }
 }
 
-fn render_help_txt(
-    f: &mut Frame<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
-    r: Rect,
-    curr_user: &str,
-) {
+// Fungsi untuk menangani tombol Ctrl+M
+
+
+
+fn render_help_txt(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r: Rect, curr_user: &str) {
     let (mut msg, style) = match app.input_mode {
-        InputMode::Normal => (
-            vec![
-                Span::raw("Press "),
-                Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" to exit, "),
-                Span::styled("i", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" to start editing."),
-            ],
-            Style::default(),
-        ),
-        InputMode::Editing | InputMode::EditingErr => (
-            vec![
-                Span::raw("Press "),
-                Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" to stop editing, "),
-                Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" to record the message"),
-            ],
-            Style::default(),
-        ),
+        InputMode::Normal => (vec![Span::raw("Press "), Span::styled("shift + q", Style::default().add_modifier(Modifier::BOLD)), Span::raw(" to exit, "), Span::styled("i", Style::default().add_modifier(Modifier::BOLD)), Span::raw(" to start editing.")], Style::default()),
+        InputMode::Editing | InputMode::EditingErr => (vec![Span::raw("Press "), Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)), Span::raw(" to stop editing, "), Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)), Span::raw(" to record the message")], Style::default()),
         InputMode::LongMessage => (vec![], Style::default()),
     };
-    msg.extend(vec![Span::raw(format!(" | {}", curr_user))]);
-    if app.is_muted {
-        let fg = tuiColor::Red;
-        let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
-        msg.extend(vec![Span::raw(" | "), Span::styled("muted", style)]);
-    } else {
-        let fg = tuiColor::LightGreen;
-        let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
-        msg.extend(vec![Span::raw(" | "), Span::styled("not muted", style)]);
-    }
+    msg.push(Span::raw(format!(" | {}", curr_user)));
+    let (mute_text, mute_style) = if app.is_muted { ("muted", Style::default().fg(tuiColor::Red).add_modifier(Modifier::BOLD)) } else { ("not muted", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD)) };
+    msg.extend(vec![Span::raw(" | "), Span::styled(mute_text, mute_style)]);
+    let (guest_text, guest_style) = if app.display_guest_view { ("G", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD)) } else { ("G", Style::default().fg(tuiColor::Gray)) };
+    msg.extend(vec![Span::raw(" | "), Span::styled(guest_text, guest_style)]);
+    let (member_text, member_style) = if app.display_member_view { ("M", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD)) } else { ("M", Style::default().fg(tuiColor::Gray)) };
+    msg.extend(vec![Span::raw(" | "), Span::styled(member_text, member_style)]);
+    let (bot_text, bot_style) = unsafe { if BOT_ACTIVE { ("Dantca Actived", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD)) } else { ("Dantca Deactived", Style::default().fg(tuiColor::Red)) } };
+    msg.extend(vec![Span::raw(" | "), Span::styled(bot_text, bot_style)]);
+    let (remove_name_text, remove_name_style) = unsafe { if REMOVE_NAME { ("Remove Name", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD)) } else { ("Remove Name", Style::default().fg(tuiColor::Red)) } };
+    msg.extend(vec![Span::raw(" | "), Span::styled(remove_name_text, remove_name_style)]);
+    
+    // Menampilkan jumlah pesan di inbox
+    let inbox_count = unsafe { INBOX_COUNT };
+    let inbox_text = format!("Inbox: {}", inbox_count);
+    let inbox_style = Style::default().fg(tuiColor::Yellow).add_modifier(Modifier::BOLD);
+    msg.extend(vec![Span::raw(" | "), Span::styled(inbox_text, inbox_style)]);
 
-    if app.display_guest_view {
-        let fg = tuiColor::LightGreen;
-        let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
-        msg.extend(vec![Span::raw(" | "), Span::styled("G", style)]);
-    } else {
-        let fg = tuiColor::Gray;
-        let style = Style::default().fg(fg);
-        msg.extend(vec![Span::raw(" | "), Span::styled("G", style)]);
-    }
-
-    if app.display_member_view {
-        let fg = tuiColor::LightGreen;
-        let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
-        msg.extend(vec![Span::raw(" | "), Span::styled("M", style)]);
-    } else {
-        let fg = tuiColor::Gray;
-        let style = Style::default().fg(fg);
-        msg.extend(vec![Span::raw(" | "), Span::styled("M", style)]);
-    }
-
-    if app.display_hidden_msgs {
-        let fg = tuiColor::LightGreen;
-        let style = Style::default().fg(fg).add_modifier(Modifier::BOLD);
-        msg.extend(vec![Span::raw(" | "), Span::styled("H", style)]);
-    } else {
-        let fg = tuiColor::Gray;
-        let style = Style::default().fg(fg);
-        msg.extend(vec![Span::raw(" | "), Span::styled("H", style)]);
-    }
     let mut text = Text::from(Spans::from(msg));
     text.patch_style(style);
     let help_message = Paragraph::new(text);
     f.render_widget(help_message, r);
 }
+
+// Komentar: Fungsi get_ping() mengembalikan nilai ping acak
+// Fungsi get_ping_color() menentukan warna berdasarkan nilai ping
 
 fn render_textbox(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r: Rect) {
     let w = (r.width - 3) as usize;
@@ -4037,155 +4101,196 @@ fn render_textbox(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r:
         overflow = std::cmp::max(app.input.width() - w, 0);
         input_str = &str[overflow..];
     }
-    let input = Paragraph::new(input_str)
-        .style(match app.input_mode {
-            InputMode::LongMessage => Style::default(),
-            InputMode::Normal => Style::default(),
-            InputMode::Editing => Style::default().fg(tuiColor::Yellow),
-            InputMode::EditingErr => Style::default().fg(tuiColor::Red),
-        })
-        .block(Block::default().borders(Borders::ALL).title("Input"));
+    let input = Paragraph::new(input_str).style(match app.input_mode {
+        InputMode::LongMessage => Style::default(),
+        InputMode::Normal => Style::default(),
+        InputMode::Editing => Style::default().fg(tuiColor::Yellow),
+        InputMode::EditingErr => Style::default().fg(tuiColor::Red),
+    }).block(Block::default().borders(Borders::ALL).title("Input"));
     f.render_widget(input, r);
     match app.input_mode {
         InputMode::LongMessage => {}
-        InputMode::Normal =>
-            // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
-            {}
-
+        InputMode::Normal => {}
         InputMode::Editing | InputMode::EditingErr => {
-            // Make the cursor visible and ask tui-rs to put it at the specified coordinates after rendering
-            f.set_cursor(
-                // Put cursor past the end of the input text
-                r.x + app.input_idx as u16 - overflow as u16 + 1,
-                // Move one line down, from the border to the input line
-                r.y + 1,
-            )
+            f.set_cursor(r.x + app.input_idx as u16 - overflow as u16 + 1, r.y + 1)
         }
     }
 }
 
-fn render_messages(
-    f: &mut Frame<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
-    r: Rect,
-    messages: &Arc<Mutex<Vec<Message>>>,
-) {
-    // Messages
-    app.items.items.clear();
+// xpldan code
+fn render_messages(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r: Rect, messages: &Arc<Mutex<Vec<Message>>>) {
     let messages = messages.lock().unwrap();
-    let messages_list_items: Vec<ListItem> = messages
-        .iter()
-        .filter_map(|m| {
-            if !app.display_hidden_msgs && m.hide {
-                return None;
-            }
-            // Simulate a guest view (remove "PMs" and "Members chat" messages)
-            if app.display_guest_view {
-                // TODO: this is not efficient at all
-                let text = m.text.text();
-                if text.starts_with(&app.members_tag) || text.starts_with(&app.staffs_tag) {
-                    return None;
-                }
-                if let Some((_, Some(_), _)) = get_message(&m.text, &app.members_tag) {
-                    return None;
-                }
-            }
-            // Display only messages from members and staff
-            if app.display_member_view {
-                // In members mode, include only messages from members and staff
-                let text = m.text.text();
-                if !text.starts_with(&app.members_tag) && !text.starts_with(&app.staffs_tag) {
-                    return None;
-                }
-                if let Some((_, Some(_), _)) = get_message(&m.text, &app.members_tag) {
-                    return None;
-                }
-            }
+    
+    // Komentar: Memperbarui app.items.items dengan messages yang telah difilter
+    app.items.items = messages.iter()
+        .filter(|m| should_display_message(app, m))
+        .cloned()
+        .collect();
 
-            if app.filter != "" {
-                if !m
-                    .text
-                    .text()
-                    .to_lowercase()
-                    .contains(&app.filter.to_lowercase())
-                {
-                    return None;
-                }
-            }
-
-            app.items.items.push(m.clone());
-
-            let new_lines = gen_lines(&m.text, (r.width - 20) as usize, " ".repeat(17).as_str());
-
-            let mut rows = vec![];
-            let date_style = match (m.deleted, m.hide) {
-                (false, true) => Style::default().fg(tuiColor::Gray),
-                (false, _) => Style::default().fg(tuiColor::DarkGray),
-                (true, _) => Style::default().fg(tuiColor::Red),
-            };
-            let mut spans_vec = vec![Span::styled(m.date.clone(), date_style)];
-            let show_sys_sep = app.show_sys && m.typ == MessageType::SysMsg;
-            let sep = if show_sys_sep { " * " } else { " - " };
-            spans_vec.push(Span::raw(sep));
-            for (idx, line) in new_lines.into_iter().enumerate() {
-                // Spams can take your whole screen, so we limit to 5 lines.
-                if idx >= 5 {
-                    spans_vec.push(Span::styled(
-                        "                 [â€¦]",
-                        Style::default().fg(tuiColor::White),
-                    ));
-                    rows.push(Spans::from(spans_vec));
-                    break;
-                }
-                for (color, txt) in line {
-                    spans_vec.push(Span::styled(txt, Style::default().fg(color)));
-                }
-                rows.push(Spans::from(spans_vec.clone()));
-                spans_vec.clear();
-            }
-
-            let style = match (m.deleted, m.hide) {
-                (true, _) => Style::default().bg(tuiColor::Rgb(30, 0, 0)),
-                (_, true) => Style::default().bg(tuiColor::Rgb(20, 20, 20)),
-                _ => Style::default(),
-            };
-            Some(ListItem::new(rows).style(style))
-        })
+    let messages_list_items: Vec<ListItem> = app.items.items.iter()
+        .map(|m| create_message_list_item(m, &app, r.width.saturating_sub(2)))
         .collect();
 
     let messages_list = List::new(messages_list_items)
         .block(Block::default().borders(Borders::ALL).title("Messages"))
-        .highlight_style(
-            Style::default()
-                .bg(tuiColor::Rgb(50, 50, 50))
-                .add_modifier(Modifier::BOLD),
-        );
-    f.render_stateful_widget(messages_list, r, &mut app.items.state)
+        .highlight_style(Style::default().bg(tuiColor::Rgb(50, 50, 50)).add_modifier(Modifier::BOLD));
+    
+    let mut items_state = app.items.state.clone();
+    f.render_stateful_widget(messages_list, r, &mut items_state);
+    app.items.state = items_state;
 }
 
+fn should_display_message(app: &App, m: &Message) -> bool {
+    (!app.display_hidden_msgs && !m.hide) &&
+    (!app.display_guest_view || !is_member_or_staff_message(m, app)) &&
+    (!app.display_member_view || is_member_or_staff_message(m, app)) &&
+    (app.filter.is_empty() || m.text.text().to_lowercase().contains(&app.filter.to_lowercase()))
+}
+
+fn is_member_or_staff_message(m: &Message, app: &App) -> bool {
+    let text = m.text.text();
+    text.starts_with(&app.members_tag) || 
+    text.starts_with(&app.staffs_tag) || 
+    get_message(&m.text, &app.members_tag).map_or(false, |(_, color, _)| color.is_some())
+}
+
+fn create_message_list_item<'a>(m: &'a Message, app: &'a App, width: u16) -> ListItem<'a> {
+    let style = get_message_style(m);
+    let rows = create_message_rows(m, app, width);
+    ListItem::new(rows).style(style)
+}
+
+fn get_message_style(m: &Message) -> Style {
+    if m.deleted {
+        Style::default().bg(tuiColor::Rgb(30, 0, 0))
+    } else if m.hide {
+        Style::default().bg(tuiColor::Rgb(20, 20, 20))
+    } else {
+        Style::default()
+    }
+}
+
+fn create_message_rows<'a>(m: &'a Message, app: &'a App, width: u16) -> Vec<Spans<'a>> {
+    let new_lines = gen_lines(&m.text, width.saturating_sub(20) as usize, " ".repeat(17).as_str());
+    let mut rows = Vec::with_capacity(std::cmp::min(new_lines.len(), 5));
+    let date_style = get_date_style(m);
+    let sep = if app.show_sys && m.typ == MessageType::SysMsg { " * " } else { " >-> " };
+    
+    for (idx, line) in new_lines.iter().take(5).enumerate() {
+        let mut spans_vec = if idx == 0 {
+            vec![Span::styled(m.date.clone(), date_style), Span::raw(sep)]
+        } else {
+            Vec::new()
+        };
+        
+        for (color, txt) in line {
+            spans_vec.push(Span::styled(txt.clone(), Style::default().fg(*color)));
+        }
+        
+        rows.push(Spans::from(spans_vec));
+    }
+    
+    if new_lines.len() > 5 {
+        rows.push(Spans::from(vec![Span::styled("                 […]", Style::default().fg(tuiColor::White))]));
+    }
+    
+    rows
+}
+
+fn get_date_style(m: &Message) -> Style {
+    match (m.deleted, m.hide) {
+        (false, true) => Style::default().fg(tuiColor::Gray),
+        (false, _) => Style::default().fg(tuiColor::DarkGray),
+        (true, _) => Style::default().fg(tuiColor::Red),
+    }
+}
+// Komentar: Fungsi ini perlu dipanggil di tempat yang sesuai dalam kode Anda,
+// mungkin di dalam loop utama atau handler pesan
+
+
 fn render_users(f: &mut Frame<CrosstermBackend<io::Stdout>>, r: Rect, users: &Arc<Mutex<Users>>) {
-    // Users lists
     let users = users.lock().unwrap();
     let mut users_list: Vec<ListItem> = vec![];
-    let mut users_types: Vec<(&Vec<(tuiColor, String)>, &str)> = Vec::new();
-    users_types.push((&users.admin, "-- Admin --"));
-    users_types.push((&users.staff, "-- Staff --"));
-    users_types.push((&users.members, "-- Members --"));
-    users_types.push((&users.guests, "-- Guests --"));
-    for (users, label) in users_types.into_iter() {
+    let users_types = vec![
+        (&users.admin, "-- Admin --"),
+        (&users.staff, "-- Staff --"),
+        (&users.members, "-- Members --"),
+        (&users.guests, "-- Guests --"),
+    ];
+
+    for (user_group, label) in users_types {
         users_list.push(ListItem::new(Span::raw(label)));
-        for (tui_color, username) in users.iter() {
+        for (tui_color, username) in user_group {
             let span = Span::styled(username, Style::default().fg(*tui_color));
             users_list.push(ListItem::new(span));
         }
     }
-    let users = List::new(users_list).block(Block::default().borders(Borders::ALL).title("Users"));
-    f.render_widget(users, r);
+
+    let users_widget = List::new(users_list)
+        .block(Block::default().borders(Borders::ALL).title("Users"));
+    f.render_widget(users_widget, r);
+}
+use tui::widgets::BorderType;
+// Komentar: Fungsi render_warned_users diubah agar dapat digunakan
+fn render_warned_users(f: &mut Frame<CrosstermBackend<io::Stdout>>, r: Rect, users: &Arc<Mutex<Users>>) {
+    let users = users.lock().unwrap();
+    let mut warned_users = WARNED_USERS.lock().unwrap();
+    
+    // Filter warned_users to only keep those who are still guests
+    warned_users.retain(|username, _| users.guests.iter().any(|(_, name)| name.to_lowercase() == username.to_lowercase()));
+
+    // Sort warned users by the most warnings
+    let mut sorted_warned_users: Vec<_> = warned_users.iter().collect();
+    sorted_warned_users.sort_by(|a, b| b.1.cmp(a.1));
+
+    // Remove users with 2 warnings or more
+    sorted_warned_users.retain(|(_, &warn_count)| warn_count < 2);
+
+    // Split the warned users into multiple columns if needed
+    let columns_count = std::cmp::max(1, (sorted_warned_users.len() + 2) / 3); // Ensure at least 1 column
+let column_width =100 / columns_count as u16; // Determine the width of each column as a percentage
+ // Determine the width of each column as a percentage
+    let mut constraints = Vec::new();
+    for _ in 0..columns_count {
+        constraints.push(Constraint::Percentage(column_width));
+    }
+    let column_areas = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(&constraints[..]) // Use the slice here
+        .split(r);
+
+    // Populate each column with warned users
+    let mut warned_lists: Vec<Vec<ListItem>> = vec![Vec::new(); columns_count];
+    for (index, (username, warn_count)) in sorted_warned_users.into_iter().enumerate() {
+        let span = Span::styled(
+            format!("Names: {} | Warns: {}", username, warn_count),
+            Style::default().fg(tuiColor::Yellow)
+        );
+        warned_lists[index / 3].push(ListItem::new(span));
+    }
+
+    // Render each column
+    for (i, warned_list) in warned_lists.into_iter().enumerate() {
+        if !warned_list.is_empty() {
+            let warned_widget = List::new(warned_list)
+                .block(Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Double)
+                    .title(format!("Warned Users {}", i + 1))
+                    .border_style(Style::default().fg(tuiColor::White))
+                    .style(Style::default().bg(tuiColor::Black))
+                );
+            f.render_widget(warned_widget, column_areas[i]);
+        }
+    }
 }
 
 fn random_string(n: usize) -> String {
-    let s: Vec<u8> = thread_rng().sample_iter(&Alphanumeric).take(n).collect();
-    std::str::from_utf8(&s).unwrap().to_owned()
+    thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(n)
+        .map(char::from)
+        .collect()
 }
 
 #[derive(PartialEq)]
@@ -4384,7 +4489,7 @@ mod tests {
                 StyledText::Styled(
                     tuiColor::Rgb(255, 255, 255),
                     vec![
-                        StyledText::Text(" prmdbba pwuvðŸ’“".to_owned()),
+                        StyledText::Text(" prmdbba pwuv💓".to_owned()),
                         StyledText::Styled(
                             tuiColor::Rgb(255, 255, 255),
                             vec![StyledText::Styled(
@@ -4422,3 +4527,4 @@ mod tests {
         assert_eq!(lines.len(), 2);
     }
 }
+

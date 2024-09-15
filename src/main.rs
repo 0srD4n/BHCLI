@@ -1776,7 +1776,45 @@ fn post_msg(
         let mut req = client.post(full_url);
         let mut form: Option<multipart::Form> = None;
 
-        match post_type {
+        match post_type { 
+            PostType::InboxClean => {
+                params.extend(vec![
+                    ("action", "inbox".to_owned()),
+                    ("do", "clean".to_owned()),
+                    ("session", session.clone()),
+                    ("lang", LANG.to_owned()),
+                    ("nc", nc_value.to_owned()),
+                ]);
+                
+                let resp = client.get(full_url)
+                    .query(&params)
+                    .send()?;
+                let inbox_content = resp.text()?;
+                let doc = Document::from(inbox_content.as_str());
+                
+                for checkbox in doc.find(Attr("name", "mid[]")) {
+                    if let Some(value) = checkbox.attr("value") {
+                        params.push(("mid[]", value.to_owned()));
+                    }
+                }
+                
+                let resp = client.post(full_url)
+                    .form(&params)
+                    .send()?;
+                
+                if resp.status().is_success() {
+                    log::info!("Semua pesan di inbox berhasil dihapus");
+                    unsafe {
+                        INBOX_COUNT = 0;
+                        LAST_MESSAGE = None;
+                    }
+                } else {
+                    log::error!("Gagal menghapus pesan di inbox");
+                }
+                
+                return Ok(RetryErr::Exit);
+            }
+
             PostType::Inbox => {
                 // Membuat request HTML untuk inbox
                 params.extend(vec![
@@ -1796,14 +1834,10 @@ fn post_msg(
                 // Proses hasil inbox
                 if let Some(messages) = extract_inbox_message(&inbox_content) {
                     unsafe {
-                        INBOX_COUNT += messages.len();
+                        INBOX_COUNT = messages.len();
                         LAST_MESSAGE = Some(messages.clone());
                     }
                     
-                    // Log pesan inbox
-                    for (sender, receiver, message) in &messages {
-                        log::info!("Pesan baru di inbox dari {} ke {}: {}", sender, receiver, message);
-                    }
                 } else {
                     log::warn!("Tidak dapat mengekstrak pesan dari inbox");
                 }
@@ -2027,6 +2061,9 @@ fn process_new_messages(
                 }
                 // Memeriksa dan mengatur status BOT_ACTIVE dan SILENTKICK
                 unsafe {
+                    if INBOX_COUNT > 0 {
+                        tx.send(PostType::Inbox).unwrap();
+                    }
                     if SILENTKICK {
                         BOT_ACTIVE = false;
                     } else if BOT_ACTIVE {
@@ -2041,6 +2078,7 @@ fn process_new_messages(
                         "dantcahelp!" => dantca_help(tx, &from),
                         "reportdan!" => report_dantca(tx, &from),
                         "silentkickdan!" => silentkicktoogle(true,tx),
+                        "cleaninbox!" => cleaninbox(tx, &from),
                         "readinbox" => readinbox(tx, &from),
                         _ => {}
                     }
@@ -2060,27 +2098,31 @@ match msg.as_str() {
         }
     }
 }
-use std::ptr::addr_of;
+fn cleaninbox(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
+    tx.send(PostType::InboxClean).unwrap();
+    let message = format!("Halo @{}, Your inbox has been cleaned", from);
+    tx.send(PostType::Post(message, Some("0".to_owned()))).unwrap();
+}
+
 fn readinbox(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
-    tx.send(PostType::Inbox).unwrap();
     let message = match unsafe { LAST_MESSAGE.as_ref() } {
         Some(messages) => {
             if messages.is_empty() {
-                format!("Hallo @{}, inbox Anda kosong.", from)
+                format!("Halo @{}, Your Inbox is empty.", from)
             } else {
-                let mut inbox_content = format!("Hallo @{}, there we go for inbox:\n", from);
-                for (index, (sender, receiver, content)) in messages.iter().enumerate() {
-                    inbox_content.push_str(&format!("Message {}:\nFrom: {}\nTo: {}\nMessage: {}\n\n", index + 1, sender, receiver, content));
+                let mut inbox_content = format!("Halo @{}, there is your inbox:\n", from);
+                for (index, (timestamp, sender, receiver, content)) in messages.iter().enumerate() {
+                    inbox_content.push_str(&format!("Message {}:\nTime: {}\nFrom: {}\nTo: {}\nContent: {}\n\n", index + 1, timestamp, sender, receiver, content));
                 }
                 inbox_content
             }
         },
-        None => format!("Hallo @{}, inbox Anda kosong.", from)
+        None => format!("Halo @{}, there is your inbox:\n", from)
     };
     tx.send(PostType::Post(message, Some("0".to_owned()))).unwrap();
 }
 
-fn extract_inbox_message(inbox_content: &str) -> Option<Vec<(String, String, String)>> {
+fn extract_inbox_message(inbox_content: &str) -> Option<Vec<(String, String, String, String)>> {
     use select::document::Document;
     use select::predicate::{Class, Name};
 
@@ -2095,8 +2137,13 @@ fn extract_inbox_message(inbox_content: &str) -> Option<Vec<(String, String, Str
                 let sender = spans[0].text().trim().to_string();
                 let receiver = spans[1].text().trim().to_string();
                 let message = spans[2].text().trim().to_string();
+                
+                let timestamp = msg_div.find(Name("small"))
+                    .next()
+                    .map(|small| small.text().trim().to_string())
+                    .unwrap_or_default();
 
-                messages.push((sender, receiver, message));
+                messages.push((timestamp, sender, receiver, message));
             }
         }
     }
@@ -2112,7 +2159,7 @@ fn extract_inbox_message(inbox_content: &str) -> Option<Vec<(String, String, Str
 }
 
 // Mengubah tipe LAST_MESSAGE menjadi Vec untuk menyimpan multiple messages
-static mut LAST_MESSAGE: Option<Vec<(String, String, String)>> = None;
+static mut LAST_MESSAGE: Option<Vec<(String, String, String, String)>> = None;
 fn silentkicktoogle(active: bool, tx: &crossbeam_channel::Sender<PostType>) {
     unsafe {
         SILENTKICK = active;
@@ -3436,18 +3483,19 @@ fn main() -> anyhow::Result<()> {
 
 #[derive(Debug, Clone)]
 enum PostType {
-    Post(String, Option<String>),   // Pesan, KirimKe
-    Kick(String, String),           // Pesan, NamaPengguna
-    Upload(String, String, String), // LokasiFile, KirimKe, Pesan
-    DeleteLast,                     // HapusTerakhir
-    DeleteAll,                      // HapusSemua
-    NewNickname(String),            // NamaPenggunaBaru
-    NewColor(String),               // WarnaBaru
-    Profile(String, String),        // WarnaBaru, NamaPenggunaBaru
-    Ignore(String),                 // NamaPengguna
-    Inbox,                          // KotakMasuk
-    Unignore(String),               // NamaPengguna
-    Clean(String, String),          // PesanBersih
+    Post(String, Option<String>),   // Message, SendTo
+    Kick(String, String),           // Message, Username
+    Upload(String, String, String), // FileLocation, SendTo, Message
+    DeleteLast,                     // DeleteLast
+    DeleteAll,                      // DeleteAll
+    NewNickname(String),            // NewUsername
+    NewColor(String),               // NewColor
+    Profile(String, String),        // NewColor, NewUsername
+    InboxClean,                     // CleanInbox
+    Ignore(String),                 // Username
+    Inbox,                          // Inbox
+    Unignore(String),               // Username
+    Clean(String, String),          // CleanMessage
 }
 
 // Get username of other user (or ours if it's the only one)
@@ -4480,4 +4528,5 @@ mod tests {
         assert_eq!(lines.len(), 2);
     }
 }
+
 
