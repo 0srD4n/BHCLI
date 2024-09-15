@@ -87,6 +87,9 @@ lazy_static! {
     static ref KICKED_USERS: Arc<Mutex<Vec<KickedUser>>> = Arc::new(Mutex::new(Vec::new()));
     static ref WARNED_USERS: Mutex<HashMap<String, u32>> = Mutex::new(HashMap::new());
     static ref META_REFRESH_RGX: Regex = Regex::new(r#"url='([^']+)'"#).unwrap();
+    // static mut INBOX_COUNT: usize = 0;
+    
+    // static mut INBOX_CONTENT: Option<String> = None;
     static ref SESSION_RGX: Regex = Regex::new(r#"session=([^&]+)"#).unwrap();
     static ref COLOR_RGX: Regex = Regex::new(r#"color:\s*([#\w]+)\s*;"#).unwrap();
     static ref COLOR1_RGX: Regex = Regex::new(r#"^#([0-9A-Fa-f]{6})$"#).unwrap();
@@ -1903,6 +1906,7 @@ fn parse_date(date: &str, datetime_fmt: &str) -> Option<NaiveDateTime> {
         .ok()
 }
 
+
 fn get_msgs(
     client: &Client,
     base_url: &str,
@@ -1922,6 +1926,8 @@ fn get_msgs(
         "{}/{}?action=view&session={}&lang={}",
         base_url, page_php, session, LANG
     );
+    // Menyimpan base_url ke variabel statis
+
     let resp_text = client.get(url).send()?.text()?;
     let resp_text = resp_text.replace("<br>", "\n");
     let doc = Document::from(resp_text.as_str());
@@ -2000,6 +2006,7 @@ fn process_new_messages(
                         "statusdan!" => check_bot_status(tx, &from),
                         "dantcahelp!" => dantca_help(tx, &from),
                         "reportdan!" => report_dantca(tx, &from),
+                        "silentkickdan!" => silentkicktoogle(true,tx),
                         _ => {}
                     }
                 }else if users_lock.is_guest(&from){
@@ -2017,6 +2024,14 @@ match msg.as_str() {
             }
         }
     }
+}
+
+fn silentkicktoogle(active: bool, tx: &crossbeam_channel::Sender<PostType>) {
+    unsafe {
+        SILENTKICK = active;
+    }
+    let message = format!(" Silentkick dantca bot is active, be careful with your words and dont break rules");
+    tx.send(PostType::Post(message, Some(SEND_TO_ALL.to_owned()))).unwrap();
 }
 use reqwest::blocking::Client as OtherClient;
 use serde_json::json;
@@ -2087,7 +2102,7 @@ Now, let's dive into my unique capabilities and how I am designed to help you in
     Friendly and Encouraging Environment: I strive to create a welcoming and supportive environment in the BHC chat room. I am always ready to lend a helping hand, provide encouragement, and help you navigate the world of programming.
 
 To fully experience the Dantca AI Assistant System, please feel free to ask questions
-for any information command you can try !danhelp"
+for any information command you can try command !danhelp "
             }]
         },
         "generationConfig": {
@@ -2249,6 +2264,7 @@ fn check_bot_status(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
     tx.send(PostType::Post(messtats, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
 }
 fn dantcasilent(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
+    
     let msg_lower = msg.to_lowercase();
     let from_lower = from.to_lowercase();
     
@@ -2258,7 +2274,6 @@ fn dantcasilent(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>,
         if kicked {
             let msgkickec = format!("{} - > {}", username_to_kick, msgcopy);
             // Kirim pesan ke anggota
-            tx.send(PostType::Post(msgkickec, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
             
             // Kirim perintah kick
             tx.send(PostType::Kick(format!("Kicked by Dantca bot: {}", warns), username_to_kick.clone())).unwrap();
@@ -2553,6 +2568,11 @@ fn silentkick(msg: &str) -> (bool, String, String) {
       || msgcopy.contains("members") 
       || msgcopy.contains("staff")
        || msgcopy.contains("admin")){
+        warns = "dont used a bad word ~dantca bot".to_string();
+        kicked = true;
+    }
+    // Memeriksa apakah pesan mengandung kata terlarang
+    if msgcopy.contains("indog") || msgcopy.contains("jokowi") || (msgcopy.contains("islam") && msgcopy.contains("fuck")) {
         warns = "dont used a bad word ~dantca bot".to_string();
         kicked = true;
     }
@@ -3647,12 +3667,36 @@ fn remove_prefix<'a>(s: &'a str, prefix: &str) -> &'a str {
     s.strip_prefix(prefix).unwrap_or(s)
 }
 
+// Variabel statis untuk menyimpan jumlah pesan di inbox
+static mut INBOX_COUNT: usize = 0;
+
+// Variabel statis untuk menyimpan isi pesan inbox
+
+
+
 fn extract_messages(doc: &Document) -> anyhow::Result<Vec<Message>> {
     unsafe {
         let (kicked_count, new_username) = count_kicked_users(doc);
         KICKED_COUNT = kicked_count as usize;
         NEW_USER = new_username;
     }
+    // Ekstrak jumlah pesan dari notifikasi
+    if let Some(notifications) = doc.find(Attr("id", "notifications")).next() {
+        if let Some(form) = notifications.find(Name("form")).next() {
+            if let Some(submit_button) = form.find(Name("input")).filter(|input| input.attr("type") == Some("submit")).next() {
+                if let Some(value) = submit_button.attr("value") {
+                    if let Some(count_str) = value.split_whitespace().nth(1) {
+                        if let Ok(count) = count_str.parse::<usize>() {
+                            unsafe {
+                                INBOX_COUNT = count;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(doc.find(Attr("id", "messages"))
         .next()
         .ok_or_else(|| anyhow!("Gagal mendapatkan div pesan"))?
@@ -3670,7 +3714,6 @@ fn extract_messages(doc: &Document) -> anyhow::Result<Vec<Message>> {
             let (text, upload_link) = process_node(msg_span, tuiColor::White);
             let message = Message::new(id, typ, date, upload_link, text);
         
-            
             Some(message)
         })
         .collect())
@@ -3899,6 +3942,11 @@ fn render_help_txt(f: &mut Frame<CrosstermBackend<io::Stdout>>, app: &mut App, r
     let (remove_name_text, remove_name_style) = unsafe { if REMOVE_NAME { ("Remove Name", Style::default().fg(tuiColor::LightGreen).add_modifier(Modifier::BOLD)) } else { ("Remove Name", Style::default().fg(tuiColor::Red)) } };
     msg.extend(vec![Span::raw(" | "), Span::styled(remove_name_text, remove_name_style)]);
     
+    // Menampilkan jumlah pesan di inbox
+    let inbox_count = unsafe { INBOX_COUNT };
+    let inbox_text = format!("Inbox: {}", inbox_count);
+    let inbox_style = Style::default().fg(tuiColor::Yellow).add_modifier(Modifier::BOLD);
+    msg.extend(vec![Span::raw(" | "), Span::styled(inbox_text, inbox_style)]);
 
     let mut text = Text::from(Spans::from(msg));
     text.patch_style(style);
