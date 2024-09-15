@@ -1371,6 +1371,7 @@ fn handle_remove_name(&mut self, _app: &mut App) {
         app.items.state.select(Some(0));
     }
 
+   
     fn handle_editing_mode_key_event_enter(&mut self, app: &mut App) -> Result<(), ExitSignal> {
         if FIND_RGX.is_match(&app.input) {
             return Ok(());
@@ -1776,6 +1777,39 @@ fn post_msg(
         let mut form: Option<multipart::Form> = None;
 
         match post_type {
+            PostType::Inbox => {
+                // Membuat request HTML untuk inbox
+                params.extend(vec![
+                    ("action", "inbox".to_owned()),
+                    ("session", session.clone()),
+                    ("lang", LANG.to_owned()),
+                    ("nc", nc_value.to_owned()),
+                ]);
+                
+                let resp = client.post(full_url)
+                    .form(&params)
+                    .send()?;
+                
+                // Mendapatkan hasil dari request
+                let inbox_content = resp.text()?;
+                
+                // Proses hasil inbox
+                if let Some(messages) = extract_inbox_message(&inbox_content) {
+                    unsafe {
+                        INBOX_COUNT += messages.len();
+                        LAST_MESSAGE = Some(messages.clone());
+                    }
+                    
+                    // Log pesan inbox
+                    for (sender, receiver, message) in &messages {
+                        log::info!("Pesan baru di inbox dari {} ke {}: {}", sender, receiver, message);
+                    }
+                } else {
+                    log::warn!("Tidak dapat mengekstrak pesan dari inbox");
+                }
+                
+                return Ok(RetryErr::Exit);
+            }
             PostType::Post(msg, send_to) => {
                 should_reset_keepalive_timer = true;
                 params.extend(vec![
@@ -2007,6 +2041,7 @@ fn process_new_messages(
                         "dantcahelp!" => dantca_help(tx, &from),
                         "reportdan!" => report_dantca(tx, &from),
                         "silentkickdan!" => silentkicktoogle(true,tx),
+                        "readinbox" => readinbox(tx, &from),
                         _ => {}
                     }
                 }else if users_lock.is_guest(&from){
@@ -2025,7 +2060,59 @@ match msg.as_str() {
         }
     }
 }
+use std::ptr::addr_of;
+fn readinbox(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
+    tx.send(PostType::Inbox).unwrap();
+    let message = match unsafe { LAST_MESSAGE.as_ref() } {
+        Some(messages) => {
+            if messages.is_empty() {
+                format!("Hallo @{}, inbox Anda kosong.", from)
+            } else {
+                let mut inbox_content = format!("Hallo @{}, there we go for inbox:\n", from);
+                for (index, (sender, receiver, content)) in messages.iter().enumerate() {
+                    inbox_content.push_str(&format!("Message {}:\nFrom: {}\nTo: {}\nMessage: {}\n\n", index + 1, sender, receiver, content));
+                }
+                inbox_content
+            }
+        },
+        None => format!("Hallo @{}, inbox Anda kosong.", from)
+    };
+    tx.send(PostType::Post(message, Some("0".to_owned()))).unwrap();
+}
 
+fn extract_inbox_message(inbox_content: &str) -> Option<Vec<(String, String, String)>> {
+    use select::document::Document;
+    use select::predicate::{Class, Name};
+
+    let doc = Document::from(inbox_content);
+    let mut messages = Vec::new();
+    
+    for msg_div in doc.find(Class("msg")) {
+        if let Some(usermsg_span) = msg_div.find(Class("usermsg")).next() {
+            let spans: Vec<_> = usermsg_span.find(Name("span")).collect();
+            
+            if spans.len() >= 3 {
+                let sender = spans[0].text().trim().to_string();
+                let receiver = spans[1].text().trim().to_string();
+                let message = spans[2].text().trim().to_string();
+
+                messages.push((sender, receiver, message));
+            }
+        }
+    }
+
+    if !messages.is_empty() {
+        unsafe {
+            LAST_MESSAGE = Some(messages.clone());
+        }
+        Some(messages)
+    } else {
+        None
+    }
+}
+
+// Mengubah tipe LAST_MESSAGE menjadi Vec untuk menyimpan multiple messages
+static mut LAST_MESSAGE: Option<Vec<(String, String, String)>> = None;
 fn silentkicktoogle(active: bool, tx: &crossbeam_channel::Sender<PostType>) {
     unsafe {
         SILENTKICK = active;
@@ -3349,17 +3436,18 @@ fn main() -> anyhow::Result<()> {
 
 #[derive(Debug, Clone)]
 enum PostType {
-    Post(String, Option<String>),   // Message, SendTo
-    Kick(String, String),           // Message, Username
-    Upload(String, String, String), // FilePath, SendTo, Message
-    DeleteLast,                     // DeleteLast
-    DeleteAll,                      // DeleteAll
-    NewNickname(String),            // NewUsername
-    NewColor(String),               // NewColor
-    Profile(String, String),        // NewColor, NewUsername
-    Ignore(String),                 // Username
-    Unignore(String),               // Username
-    Clean(String, String),          // Clean message
+    Post(String, Option<String>),   // Pesan, KirimKe
+    Kick(String, String),           // Pesan, NamaPengguna
+    Upload(String, String, String), // LokasiFile, KirimKe, Pesan
+    DeleteLast,                     // HapusTerakhir
+    DeleteAll,                      // HapusSemua
+    NewNickname(String),            // NamaPenggunaBaru
+    NewColor(String),               // WarnaBaru
+    Profile(String, String),        // WarnaBaru, NamaPenggunaBaru
+    Ignore(String),                 // NamaPengguna
+    Inbox,                          // KotakMasuk
+    Unignore(String),               // NamaPengguna
+    Clean(String, String),          // PesanBersih
 }
 
 // Get username of other user (or ours if it's the only one)
