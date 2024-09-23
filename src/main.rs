@@ -83,7 +83,10 @@ const DNMX_URL: &str = "http://hxuzjtocnzvv5g2rtg2bhwkcbupmk7rclb6lly3fo4tvqkk5o
 // const BHCLI_BLOG_URL: &str = "sss";
 
 
+
 lazy_static! {
+        static ref GLOBAL_CONFIG: Mutex<LeChatPHPConfig> = Mutex::new(LeChatPHPConfig::new_black_hat_chat_config());
+    
     static ref KICKED_USERS: Arc<Mutex<Vec<KickedUser>>> = Arc::new(Mutex::new(Vec::new()));
     static ref WARNED_USERS: Mutex<HashMap<String, u32>> = Mutex::new(HashMap::new());
     static ref META_REFRESH_RGX: Regex = Regex::new(r#"url='([^']+)'"#).unwrap();
@@ -588,17 +591,22 @@ impl LeChatPHPClient {
 
     fn logout(&mut self) -> anyhow::Result<()> {
         if let Some(session) = &self.session {
+            // Ambil config global menggunakan GLOBAL_CONFIG
+            let config = GLOBAL_CONFIG.lock().unwrap();
+    
+            // Panggil fungsi logout dengan config yang diambil
             lechatphp::logout(
                 &self.client,
-                &self.config.url,
-                &self.config.page_php,
+                &config.url,
+                &config.page_php,
                 session,
             )?;
+    
+            // Hapus sesi setelah logout
             self.session = None;
         }
         Ok(())
     }
-
 
     fn start_cycle(&self, color_only: bool) {
         let username = self.base_client.username.clone();
@@ -1814,7 +1822,21 @@ fn post_msg(
                 
                 return Ok(RetryErr::Exit);
             }
+         PostType::Keluar => {
+    // Membuat request HTML untuk logout
+    let mut params = vec![
+        ("action", "logout".to_owned()),
+        ("session", session.clone()),   // Menggunakan session yang sudah ada
+        ("lang", LANG.to_owned()),      // Misalnya, LANG = "en"
+        ("nc", nc_value.to_owned()),    // Gunakan nilai "nc" yang sudah ada atau di-generate sebelumnya
+    ];
 
+    // Kirim request logout ke server
+    let resp = client.post(full_url)
+        .form(&params)   // Menggunakan metode form untuk mengirim data
+        .send()?;        // Kirim permintaan
+
+}
             PostType::Inbox => {
                 // Membuat request HTML untuk inbox
                 params.extend(vec![
@@ -2070,6 +2092,7 @@ fn process_new_messages(
                         SILENTKICK = false;
                     }
                 }
+                if from ==
                 if !users_lock.is_guest(&from) {
                     match msg.as_str() {
                         "dantcaoff!" => toggle_bot_active(false, tx, &from),
@@ -2079,7 +2102,7 @@ fn process_new_messages(
                         "reportdan!" => report_dantca(tx, &from),
                         "silentkickdan!" => silentkicktoogle(true,tx),
                         "cleaninbox!" => cleaninbox(tx, &from),
-                        "readinbox" => readinbox(tx, &from),
+                        "readinbox!" => readinbox(tx, &from),
                         _ => {}
                     }
                 }else if users_lock.is_guest(&from){
@@ -2097,6 +2120,15 @@ match msg.as_str() {
             }
         }
     }
+}
+fn shadowleft(tx: &crossbeam_channel::Sender<PostType>, from:&str) {
+    let message = format!("Hallo all skill shadow is actived by {}.. remove all message and logout... passed 20 second --",from);
+    tx.send(PostType::Post(message, Some(SEND_TO_ALL.to_owned()))).unwrap();
+    there::sleep(Duration::from_secs(10))
+    tx.send(PostType::DeleteAll).unwrap();
+    thread::sleep(Duration::from_secs(10));
+    tx.send(PostType::Keluar).unwrap();
+
 }
 fn cleaninbox(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
     tx.send(PostType::InboxClean).unwrap();
@@ -3493,7 +3525,8 @@ enum PostType {
     Profile(String, String),        // NewColor, NewUsername
     InboxClean,                     // CleanInbox
     Ignore(String),                 // Username
-    Inbox,                          // Inbox
+    Inbox,                    
+    Keluar,      // Inbox
     Unignore(String),               // Username
     Clean(String, String),          // CleanMessage
 }
