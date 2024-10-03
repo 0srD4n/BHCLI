@@ -2268,7 +2268,7 @@ Now, let's dive into my unique capabilities and how I am designed to help you in
     Friendly and Encouraging Environment: I strive to create a welcoming and supportive environment in the BHC chat room. I am always ready to lend a helping hand, provide encouragement, and help you navigate the world of programming.
 
 To fully experience the Dantca AI Assistant System, please feel free to ask questions
-for any information command you can try command danhelp! "
+for any information command you can try command 'danhelp!' "
             }]
         },
         "generationConfig": {
