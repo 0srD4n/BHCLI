@@ -2076,7 +2076,7 @@ fn process_new_messages(
                     dantcasilent(&from, &msg, tx, &users_lock);
                 }
                 // Pindahkan pemanggilan fungsi yang membutuhkan akses ke users ke dalam blok ini
-                                rt.block_on(async { gemini(tx, &from, &msg).await });
+                rt.block_on(async { gemini(tx, &from, &msg).await });
                 if unsafe { BOT_ACTIVE } {
                     dantca_imps_proses(&from, &msg, tx, &users_lock);
                     send_greeting(tx, &users_lock);
@@ -2092,7 +2092,6 @@ fn process_new_messages(
                         SILENTKICK = false;
                     }
                 }
-                if from ==
                 if !users_lock.is_guest(&from) {
                     match msg.as_str() {
                         "dantcaoff!" => toggle_bot_active(false, tx, &from),
@@ -2100,16 +2099,16 @@ fn process_new_messages(
                         "statusdan!" => check_bot_status(tx, &from),
                         "dantcahelp!" => dantca_help(tx, &from),
                         "reportdan!" => report_dantca(tx, &from),
-                        "silentkickdan!" => silentkicktoogle(true,tx),
+                        "silentkickdan!" => silentkicktoogle(true, tx),
                         "cleaninbox!" => cleaninbox(tx, &from),
                         "readinbox!" => readinbox(tx, &from),
                         _ => {}
                     }
-                }else if users_lock.is_guest(&from){
-match msg.as_str() {
-    "danhelp!" => dantca_guest_proses(&from, tx),
-    _ => {}
-}
+                } else if users_lock.is_guest(&from) {
+                    match msg.as_str() {
+                        "danhelp!" => dantca_guest_proses(&from, tx),
+                        _ => {}
+                    }
                 }
                 
                 // Lepaskan MutexGuard setelah selesai menggunakannya
@@ -2124,7 +2123,7 @@ match msg.as_str() {
 fn shadowleft(tx: &crossbeam_channel::Sender<PostType>, from:&str) {
     let message = format!("Hallo all skill shadow is actived by {}.. remove all message and logout... passed 20 second --",from);
     tx.send(PostType::Post(message, Some(SEND_TO_ALL.to_owned()))).unwrap();
-    there::sleep(Duration::from_secs(10))
+    thread::sleep(Duration::from_secs(10));
     tx.send(PostType::DeleteAll).unwrap();
     thread::sleep(Duration::from_secs(10));
     tx.send(PostType::Keluar).unwrap();
