@@ -2736,6 +2736,10 @@ fn silentkick(msg: &str) -> (bool, String, String) {
         warns = "dont used a bad word ~dantca bot".to_string();
         kicked = true;
     }
+    if msgcopy.len() > 1000 {
+        warns = "Message too long (over 1000 characters). if is the filter you can try send to @0 user".to_string();
+        kicked = true;
+    }
     // Memeriksa apakah pesan mengandung kata terlarang
     if msgcopy.contains("indog") || msgcopy.contains("jokowi") || (msgcopy.contains("islam") && msgcopy.contains("fuck")) {
         warns = "dont used a bad word ~dantca bot".to_string();
@@ -3021,7 +3025,7 @@ fn check_message_content(msg: &str) -> (bool, bool, &str, bool, &str) {
     }
     if msgcopy.len() > 1000 {
         warns = "Message too long (over 1000 characters). if is the filter you can try send to @0 user";
-        triggered = true;
+        kicked = true;
     }
     if msgcopy.contains("link ") && 
     (msgcopy.contains("want ") 
