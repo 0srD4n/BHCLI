@@ -2429,7 +2429,6 @@ fn check_bot_status(tx: &crossbeam_channel::Sender<PostType>, from: &str) {
     tx.send(PostType::Post(messtats, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
 }
 fn dantcasilent(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
-    
     let msg_lower = msg.to_lowercase();
     let from_lower = from.to_lowercase();
     
@@ -2439,20 +2438,21 @@ fn dantcasilent(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>,
         if kicked {
             let msgkickec = format!("{} - > {}", username_to_kick, msgcopy);
             // Kirim pesan ke anggota
+            tx.send(PostType::Post(msgkickec, Some(SEND_TO_MEMBERS.to_owned()))).unwrap();
             
             // Kirim perintah kick
             tx.send(PostType::Kick(format!("Kicked by Dantca bot: {}", warns), username_to_kick.clone())).unwrap();
             
             // Tambahkan pengguna yang di-kick ke daftar
+            add_kicked_user(username_to_kick.clone(), warns.to_string());
         }
     }
 }
+
 fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
     let msg_lower = msg.to_lowercase();
     let from_lower = from.to_lowercase();
-    // filer untuk membantu gusest dalam hal apapun
-
-
+    // Filter untuk membantu guest dalam hal apapun
 
     if let Some((_color, _username)) = users.guests.iter().find(|(_color, name)| name.to_lowercase() == from_lower) {
         let username_to_kick = from_lower.clone();
@@ -2469,15 +2469,21 @@ fn dantca_imps_proses(from: &str, msg: &str, tx: &crossbeam_channel::Sender<Post
         if *count >= 2 {
             tx.send(PostType::Kick(format!(">>> Dantca : Hallo  @{},[color=#ffffff] You have been warned multiple warns | = {} = |times and are now being kicked. BYE BYE !![/color] <<< ", username_to_kick, *count), username_to_kick.clone())).unwrap();
             add_kicked_user(username_to_kick.clone(), format!("Multiple warnings: {}", warns));
+            // Reset peringatan setelah menendang pengguna
+            warned_users.remove(&from_lower);
         }
         
         if kicked {
-            tx.send(PostType::Post(format!(">>> Dantca :  Hallo @{}, [color=#ffffff]-> your warnings: {} [BANNED TOPIC]-< BYE! BYE![/color]  <<<", username_to_kick, warns), Some(SEND_TO_ALL.to_owned()))).unwrap();
+            tx.send(PostType::Post(format!(">>> Dantca :  Hallo @{}, > your warnings: {} [BANNED TOPIC]-< BYE! BYE!  <<<", username_to_kick, warns.to_string()), 
+            Some(SEND_TO_ALL.to_owned()))).unwrap();
             tx.send(PostType::Kick(format!("Kicked by Dantca bot: {}", warns), username_to_kick.clone())).unwrap();
             add_kicked_user(username_to_kick.clone(), warns.to_string());
+            // Reset peringatan setelah menendang pengguna
+            warned_users.remove(&from_lower);
         }
+        
         if help {
-let msh = format!("Hallo @{}, {}", from, message);
+            let msh = format!("Hallo @{}, {}", from, message);
             tx.send(PostType::Post(msh, Some(SEND_TO_ALL.to_owned()))).unwrap();
         }
     }
@@ -2747,9 +2753,9 @@ fn silentkick(msg: &str) -> (bool, String, String) {
     }
     // satu kata  logic kicked
     match msgcopy.as_str() {
-        "porn" | "child porn" | "cp" | "gore" | "fuck" | "carding" | "horny" | "bitch" | "cock" | "cocaine" => {
+        "porn" | "child porn" | "cp" | "gore" | "carding" | "horny" | "bitch" | "cock" | "cocaine" => {
             // Pesan peringatan untuk konten yang tidak pantas
-            warns = "Bye Bye !!kicked by dantca bot".to_string();
+            warns = "dont bad word ".to_string();
             kicked = true;
         },
         _ => {}
@@ -3016,9 +3022,9 @@ fn check_message_content(msg: &str) -> (bool, bool, &str, bool, &str) {
     }
     // satu kata  logic kicked
     match msgcopy.as_str() {
-        "porn" | "child porn" | "cp" | "gore" | "fuck" | "carding" | "horny" | "bitch" | "cock" | "cocaine" => {
+        "porn" | "child porn" | "cp" | "gore" | "carding" | "horny" | "bitch" | "cock" | "cocaine" => {
             // Pesan peringatan untuk konten yang tidak pantas
-            warns = "Bye Bye !!kicked by dantca bot";
+            warns = "Bye Bye dont used word";
             kicked = true;
         },
         _ => {}
