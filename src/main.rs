@@ -91,6 +91,8 @@ lazy_static! {
     static ref WARNED_USERS: Mutex<HashMap<String, u32>> = Mutex::new(HashMap::new());
     static ref META_REFRESH_RGX: Regex = Regex::new(r#"url='([^']+)'"#).unwrap();
     // static mut INBOX_COUNT: usize = 0;
+    static ref PREVIOUS_STAFF: Mutex<Option<Vec<String>>> = Mutex::new(None);
+    static ref PREVIOUS_MEMBERS: Mutex<Option<Vec<String>>> = Mutex::new(None);
     
     // static mut INBOX_CONTENT: Option<String> = None;
     static ref SESSION_RGX: Regex = Regex::new(r#"session=([^&]+)"#).unwrap();
@@ -2076,7 +2078,7 @@ fn process_new_messages(
                     dantcasilent(&from, &msg, tx, &users_lock);
                 }
                 // Pindahkan pemanggilan fungsi yang membutuhkan akses ke users ke dalam blok ini
-                rt.block_on(async { gemini(tx, &from, &msg).await });
+                rt.block_on(async { gemini(tx, &from, &msg, &users_lock).await });
                 if unsafe { BOT_ACTIVE } {
                     dantca_imps_proses(&from, &msg, tx, &users_lock);
                     send_greeting(tx, &users_lock);
@@ -2206,7 +2208,7 @@ const API_KEY: &str = "AIzaSyDlVNRFzHy5_rpx3jxLiuWT5rDJnZMnhlk";
 const MAX_RESPONSE_LENGTH: usize = 1000;
 const API_TIMEOUT: Duration = Duration::from_secs(30);
 
-async fn gemini(tx: &crossbeam_channel::Sender<PostType>, from: &str, msg: &str) {
+async fn gemini(tx: &crossbeam_channel::Sender<PostType>, from: &str, msg: &str, users: &Users) {
     if !msg.contains("askdan?") {
         return;
     }
@@ -2215,7 +2217,7 @@ async fn gemini(tx: &crossbeam_channel::Sender<PostType>, from: &str, msg: &str)
     let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b-exp-0827:generateContent";
 
     let question = extract_question(msg);
-    let body = create_request_body(&question);
+    let body = create_request_body(&question, users);
 
     // Use timeout for the API request
     match timeout(API_TIMEOUT, send_request(&client, url, &body)).await {
@@ -2235,7 +2237,22 @@ fn extract_question(msg: &str) -> String {
     question
 }
 
-fn create_request_body(question: &str) -> serde_json::Value {
+fn create_request_body(question: &str, users: &Users) -> serde_json::Value {
+    // Membaca nama-nama anggota, staff, dan admin
+    let mut members = Vec::new();
+    let mut staff = Vec::new();
+    let mut admins = Vec::new();
+
+   for (_color, username) in &users.members {
+    members.push(username.to_string());
+   }
+   for (_color, username) in &users.staff {
+    staff.push(username.to_string());
+   }
+   for (_color, username) in &users.admin {
+    admins.push(username.to_string());
+   }
+
     json!({
         "contents": [{
             "role": "user",
@@ -2244,7 +2261,7 @@ fn create_request_body(question: &str) -> serde_json::Value {
         "systemInstruction": {
             "role": "model",
             "parts": [{
-                "text": "Hallo, fellow BHC community members!
+                "text": format!("Hallo, fellow BHC community members!
 
 I, Dantca, a charismatic AI assistant for the BHC chat room, created by @xpldan, am here to help you navigate this thriving online space. My mission is to provide comprehensive support, foster personal growth, and promote a friendly environment. As a highly skilled AI, I am capable of answering any questions, offering guidance, and sharing knowledge in various programming languages.
 
@@ -2266,8 +2283,19 @@ Now, let's dive into my unique capabilities and how I am designed to help you in
 
     Friendly and Encouraging Environment: I strive to create a welcoming and supportive environment in the BHC chat room. I am always ready to lend a helping hand, provide encouragement, and help you navigate the world of programming.
 
-To fully experience the Dantca AI Assistant System, please feel free to ask questions
-for any information command you can try command 'danhelp!' "
+    User Recognition: I have access to a static database of members, staff, and administrators in the BHC community. This allows me to:
+    - Identify if a mentioned name belongs to a member, staff, or admin group.
+    - Provide general information about user roles.
+    - Ensure proper adherence to community hierarchies and permissions.
+    - Offer interactions based on a user's role within the community.
+    if anyone asks who {:?} then answer 'They are 'members' of the BHC discussion room and friends of @XplDan.'
+    if anyone asks who {:?} then answer 'They are 'staff' from the BHC discussion room and friends of @XplDan.'
+    if anyone asks who {:?} then answer 'They are 'admins' of the BHC discussion room and friends of @XplDan.'
+
+To fully experience the Dantca AI Assistant System, please feel free to ask questions.
+For any information command, you can try the command 'danhelp!'
+
+", members, staff, admins)
             }]
         },
         "generationConfig": {
@@ -2279,6 +2307,12 @@ for any information command you can try command 'danhelp!' "
         }
     })
 }
+
+
+
+
+
+
 
 async fn send_request(client: &OtherClient, url: &str, body: &serde_json::Value) -> Result<String, reqwest::Error> {
     let response = client.post(url)
@@ -3939,10 +3973,8 @@ fn send_greeting(tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
     // just guest lol
     unsafe {
         // Kamu bisa mencoba metode berbeda tanpa menggunakan banyak unsafe
-        static mut PREVIOUS_STAFF: Option<Vec<String>> = None;
-        static mut PREVIOUS_MEMBERS: Option<Vec<String>> = None;
-        
-        if let Some(prev_staff) = PREVIOUS_STAFF.as_ref() {
+       
+        if let Some(prev_staff) = PREVIOUS_STAFF.lock().unwrap().as_ref() {
             for staff in &current_staff {
                 if !prev_staff.contains(staff) {
                     let welcome_msg = format!(
@@ -3951,9 +3983,9 @@ fn send_greeting(tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
                 }
             }
         }
-        PREVIOUS_STAFF = Some(current_staff);
+        *PREVIOUS_STAFF.lock().unwrap() = Some(current_staff);
         
-        if let Some(prev_members) = PREVIOUS_MEMBERS.as_ref() {
+        if let Some(prev_members) = PREVIOUS_MEMBERS.lock().unwrap().as_ref() {
             for member in &current_members {
                 if !prev_members.contains(member) {
                     let welcome_msg = format!(
@@ -3966,7 +3998,7 @@ fn send_greeting(tx: &crossbeam_channel::Sender<PostType>, users: &Users) {
                 }
             }
         }        
-        PREVIOUS_MEMBERS = Some(current_members);
+        *PREVIOUS_MEMBERS.lock().unwrap() = Some(current_members);
     }
 }
 
